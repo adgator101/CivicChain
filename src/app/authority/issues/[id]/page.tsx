@@ -4,14 +4,14 @@ import { ArrowLeft, MapPin, Layers, UserCheck, FileText } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { Role, IssueStatus } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { computeEscalation, formatRelativeTime } from "@/lib/utils";
+import { formatRelativeTime } from "@/lib/utils";
 import { categoryToDepartment } from "@/lib/departments";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { IssueStatusBadge } from "@/components/civic/issue-status-badge";
 import { PriorityBadge } from "@/components/civic/priority-badge";
 import { CommunityImpactMeter } from "@/components/civic/community-impact-meter";
-import { EscalationBadge } from "@/components/civic/escalation-badge";
+import { AttentionBadge } from "@/components/civic/attention-badge";
 import { IssueLocationMap } from "@/components/civic/issue-location-map";
 import { IssueTimeline } from "@/components/civic/issue-timeline";
 import { AssignIssueDialog } from "@/components/civic/assign-issue-dialog";
@@ -70,12 +70,6 @@ export default async function AuthorityIssueDetailPage({
     notFound();
   }
 
-  const escalation = computeEscalation(
-    issue.status,
-    issue.priority,
-    issue.updatedAt,
-    issue.dueDate
-  );
   const allowedNext = ALLOWED_NEXT[issue.status] ?? [];
   const canAssign =
     issue.status === IssueStatus.VERIFIED &&
@@ -104,14 +98,11 @@ export default async function AuthorityIssueDetailPage({
         <div className="flex flex-wrap items-center gap-2">
           <IssueStatusBadge status={issue.status} />
           <PriorityBadge priority={issue.priority} />
-          {escalation.isEscalated && (
-            <EscalationBadge
-              status={issue.status}
-              priority={issue.priority}
-              updatedAt={issue.updatedAt}
-              dueDate={issue.dueDate}
-            />
-          )}
+          <AttentionBadge
+            status={issue.status}
+            updatedAt={issue.updatedAt}
+            dueDate={issue.dueDate}
+          />
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">{issue.title}</h1>
         {issue.description && (
