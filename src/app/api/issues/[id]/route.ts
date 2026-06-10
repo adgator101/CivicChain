@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getCurrentUser } from "@/lib/session";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const user = await getCurrentUser();
 
   const issue = await prisma.issue.findUnique({
     where: { id },
@@ -14,6 +16,7 @@ export async function GET(
         select: {
           id: true,
           title: true,
+          images: true,
           createdAt: true,
           user: { select: { id: true, name: true } },
         },
@@ -33,5 +36,14 @@ export async function GET(
     return NextResponse.json({ error: "Issue not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ issue });
+  const myVerification = user
+    ? (
+        await prisma.issueVerification.findUnique({
+          where: { issueId_userId: { issueId: id, userId: user.id } },
+          select: { type: true },
+        })
+      )?.type ?? null
+    : null;
+
+  return NextResponse.json({ issue: { ...issue, myVerification } });
 }
