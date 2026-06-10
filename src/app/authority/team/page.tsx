@@ -1,6 +1,7 @@
 import { requireRole } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
 import { Role } from "@/generated/prisma/client";
+import { getEmployeePerformance, scopeForUser, type EmployeePerformance } from "@/lib/queries";
 import { Card } from "@/components/ui/card";
 import { Users2, ChevronRight } from "lucide-react";
 import { AddEmployeeDialog } from "@/components/civic/add-employee-dialog";
@@ -56,7 +57,7 @@ function groupByWard(employees: Employee[]) {
   return groups;
 }
 
-function EmployeeRow({ e }: { e: Employee }) {
+function EmployeeRow({ e, perf }: { e: Employee; perf?: EmployeePerformance }) {
   return (
     <div
       className={cn(
@@ -71,6 +72,20 @@ function EmployeeRow({ e }: { e: Employee }) {
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium leading-snug">{e.name}</p>
         <p className="truncate text-xs text-muted-foreground">{e.email}</p>
+        {perf && (perf.open > 0 || perf.resolved > 0) && (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {perf.open} open · {perf.resolved} resolved
+            {perf.avgResolutionDays != null ? ` · ~${perf.avgResolutionDays}d avg` : ""}
+            {perf.oldestOpenDays != null ? ` · oldest ${perf.oldestOpenDays}d` : ""}
+            {perf.pastThreshold > 0 ? (
+              <span className="text-amber-700 dark:text-amber-400">
+                {" "}· {perf.pastThreshold} past 14d
+              </span>
+            ) : (
+              ""
+            )}
+          </p>
+        )}
       </div>
 
       {e.department ? (
@@ -119,6 +134,8 @@ export default async function TeamPage() {
     },
     orderBy: [{ isActive: "desc" }, { name: "asc" }],
   });
+
+  const performance = await getEmployeePerformance(scopeForUser(user));
 
   const activeCount = employees.filter((e) => e.isActive).length;
   const wardCount = new Set(
@@ -178,7 +195,7 @@ export default async function TeamPage() {
                 </summary>
                 <div className="divide-y border-t">
                   {group.employees.map((e) => (
-                    <EmployeeRow key={e.id} e={e} />
+                    <EmployeeRow key={e.id} e={e} perf={performance[e.id]} />
                   ))}
                 </div>
               </details>

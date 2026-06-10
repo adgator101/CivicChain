@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { IssueStatusBadge } from "./issue-status-badge";
 import { PriorityBadge } from "./priority-badge";
 import { CommunityImpactMeter } from "./community-impact-meter";
-import { EscalationBadge } from "./escalation-badge";
+import { AttentionBadge } from "./attention-badge";
 import { categoryLabel, formatRelativeTime } from "@/lib/utils";
 import type { Category, IssueStatus, Priority } from "@/generated/prisma/client";
 
@@ -46,9 +46,8 @@ export function IssueCard({
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <IssueStatusBadge status={issue.status} />
-            <EscalationBadge
+            <AttentionBadge
               status={issue.status}
-              priority={issue.priority}
               updatedAt={issue.updatedAt}
               dueDate={issue.dueDate}
             />
