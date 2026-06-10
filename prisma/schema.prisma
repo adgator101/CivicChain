@@ -1,0 +1,253 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────────
+
+enum Role {
+  CITIZEN
+  LOCAL_BODY_EMPLOYEE
+  LOCAL_BODY_HEAD
+  EXECUTIVE_BODY
+}
+
+enum IssueStatus {
+  SUBMITTED
+  VERIFIED
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  REOPENED
+}
+
+enum ReportStatus {
+  PENDING
+  ATTACHED
+  PROMOTED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum Category {
+  INFRASTRUCTURE
+  WATER_SANITATION
+  WASTE_MANAGEMENT
+  ELECTRICITY
+  ROAD
+  ENVIRONMENT
+  PUBLIC_SAFETY
+  OTHER
+}
+
+enum VerificationType {
+  CONFIRM
+  DISPUTE
+}
+
+enum RootIssueStatus {
+  ACTIVE
+  RESOLVED
+}
+
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean
+  image         String?
+  createdAt     DateTime
+  updatedAt     DateTime
+
+  role          Role      @default(CITIZEN)
+  wardNumber    Int?
+  municipalityName String?
+  districtName  String?
+  provinceName  String?
+  phone         String?
+
+  // Relations
+  sessions           Session[]
+  accounts           Account[]
+
+  reports            Report[]
+  issueVerifications IssueVerification[]
+  issueUpdates       IssueUpdate[]
+  assignedIssues     Issue[]             @relation("AssignedOfficer")
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime
+  updatedAt DateTime
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+
+  @@map("verification")
+}
+
+
+model Report {
+  id          String       @id @default(cuid())
+  title       String
+  description String
+  category    Category
+  latitude    Float
+  longitude   Float
+  address     String?
+  wardNumber  Int?
+  municipalityName String?
+  districtName     String?
+  provinceName     String?
+  images      String[]
+
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+
+  issueId     String?
+  issue       Issue?       @relation(fields: [issueId], references: [id])
+
+  aiAnalysis  Json?
+  status      ReportStatus @default(PENDING)
+
+  createdAt   DateTime     @default(now())
+
+  @@map("report")
+}
+
+model Issue {
+  id          String      @id @default(cuid())
+  title       String
+  description String
+  category    Category
+  status      IssueStatus @default(SUBMITTED)
+  priority    Priority    @default(MEDIUM)
+
+  latitude    Float
+  longitude   Float
+  address     String?
+  wardNumber  Int?
+  municipalityName String?
+  districtName     String?
+  provinceName     String?
+
+  reports       Report[]
+  updates       IssueUpdate[]
+
+  confirmCount  Int          @default(0)
+  disputeCount  Int          @default(0)
+
+  assignedToId  String?
+  assignedTo    User?        @relation("AssignedOfficer", fields: [assignedToId], references: [id])
+
+  rootIssueId              String?
+  rootIssue                RootIssue? @relation(fields: [rootIssueId], references: [id])
+
+  aiRootCauseSuggestion    String?
+  aiRootCauseReason        String?
+  aiRootCauseConfidence    Float?
+  aiRootCauseRelatedIds    String[]
+
+  escalatedAt  DateTime?
+  dueDate      DateTime?
+
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@map("issue")
+}
+
+model IssueVerification {
+  id        String           @id @default(cuid())
+  issueId   String
+  userId    String
+  user      User             @relation(fields: [userId], references: [id])
+
+  type      VerificationType @default(CONFIRM)
+  createdAt DateTime         @default(now())
+
+  @@unique([issueId, userId])
+  @@map("issue_verification")
+}
+
+model IssueUpdate {
+  id           String      @id @default(cuid())
+  issueId      String
+  issue        Issue       @relation(fields: [issueId], references: [id])
+
+  authorId     String
+  author       User        @relation(fields: [authorId], references: [id])
+
+  content      String
+  images       String[]
+  statusChange IssueStatus?
+
+  createdAt    DateTime    @default(now())
+
+  @@map("issue_update")
+}
+
+model RootIssue {
+  id          String          @id @default(cuid())
+  title       String
+  description String
+  category    Category
+  status      RootIssueStatus @default(ACTIVE)
+
+  municipalityName String?
+  districtName     String?
+  provinceName     String?
+
+  issues      Issue[]
+
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@map("root_issue")
+}
