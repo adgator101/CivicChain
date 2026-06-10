@@ -4,12 +4,11 @@ import { ArrowLeft, MapPin, Layers, Eye, FileText } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { Role } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { computeEscalation } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { IssueStatusBadge } from "@/components/civic/issue-status-badge";
 import { PriorityBadge } from "@/components/civic/priority-badge";
 import { CommunityImpactMeter } from "@/components/civic/community-impact-meter";
-import { EscalationBadge } from "@/components/civic/escalation-badge";
+import { AttentionBadge } from "@/components/civic/attention-badge";
 import { IssueLocationMap } from "@/components/civic/issue-location-map";
 import { IssueTimeline } from "@/components/civic/issue-timeline";
 
@@ -45,12 +44,6 @@ export default async function ExecutiveIssueDetailPage({
 
   if (!issue) notFound();
 
-  const escalation = computeEscalation(
-    issue.status,
-    issue.priority,
-    issue.updatedAt,
-    issue.dueDate
-  );
   const photos = issue.reports.flatMap((r) => r.images);
   const locationParts = [
     issue.wardNumber ? `Ward ${issue.wardNumber}` : null,
@@ -80,14 +73,11 @@ export default async function ExecutiveIssueDetailPage({
         <div className="flex flex-wrap items-center gap-2">
           <IssueStatusBadge status={issue.status} />
           <PriorityBadge priority={issue.priority} />
-          {escalation.isEscalated && (
-            <EscalationBadge
-              status={issue.status}
-              priority={issue.priority}
-              updatedAt={issue.updatedAt}
-              dueDate={issue.dueDate}
-            />
-          )}
+          <AttentionBadge
+            status={issue.status}
+            updatedAt={issue.updatedAt}
+            dueDate={issue.dueDate}
+          />
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">{issue.title}</h1>
         {issue.description && (

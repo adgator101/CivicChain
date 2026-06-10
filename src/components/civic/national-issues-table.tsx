@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Category, IssueStatus, Priority } from "@/generated/prisma/enums";
 import {
   categoryLabel,
-  computeEscalation,
+  needsAttention,
   formatRelativeTime,
 } from "@/lib/utils";
 import { IssueStatusBadge } from "./issue-status-badge";
@@ -170,7 +170,7 @@ export function NationalIssuesTable({
               <th className="px-3 py-2 font-medium">Status</th>
               <th className="px-3 py-2 font-medium">Priority</th>
               <th className="px-3 py-2 text-right font-medium">Citizens</th>
-              <th className="px-3 py-2 font-medium">Escalation</th>
+              <th className="px-3 py-2 font-medium">Attention</th>
               <th className="px-3 py-2 font-medium">Created</th>
             </tr>
           </thead>
@@ -189,12 +189,7 @@ export function NationalIssuesTable({
               </tr>
             ) : (
               issues.map((issue) => {
-                const esc = computeEscalation(
-                  issue.status,
-                  issue.priority,
-                  new Date(issue.updatedAt),
-                  issue.dueDate ? new Date(issue.dueDate) : null
-                );
+                const att = needsAttention(issue.status, new Date(issue.updatedAt));
                 return (
                   <tr key={issue.id} className="transition-colors hover:bg-muted/40">
                     <td className="max-w-xs px-3 py-2">
@@ -221,14 +216,18 @@ export function NationalIssuesTable({
                       {issue.affectedCitizenCount}
                     </td>
                     <td className="px-3 py-2">
-                      {esc.isEscalated ? (
-                        <span className="font-medium text-red-600 dark:text-red-400">
-                          {Math.floor(esc.hoursOverdue / 24) >= 1
-                            ? `${Math.floor(esc.hoursOverdue / 24)}d overdue`
-                            : `${esc.hoursOverdue}h overdue`}
-                        </span>
+                      {att.reason === "Resolved" ? (
+                        <span className="text-muted-foreground">—</span>
                       ) : (
-                        <span className="text-muted-foreground">On track</span>
+                        <span
+                          className={
+                            att.flagged
+                              ? "font-medium text-amber-700 dark:text-amber-400"
+                              : "text-muted-foreground"
+                          }
+                        >
+                          {att.reason} {att.daysInStatus}d
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">

@@ -26,11 +26,11 @@ export function DeadlineForm({
 
   const { execute, isPending } = useAction(setIssueDueDateAction, {
     onSuccess: () => {
-      toast.success("Deadline updated.");
+      toast.success("Commitment date set.");
       router.refresh();
     },
     onError: ({ error }) => {
-      toast.error(error.serverError ?? "Could not set the deadline.");
+      toast.error(error.serverError ?? "Could not set the commitment date.");
     },
   });
 
@@ -38,7 +38,7 @@ export function DeadlineForm({
     <div className="flex flex-wrap items-end gap-2">
       <div className="space-y-1.5">
         <label htmlFor="deadline" className="text-sm font-medium">
-          Deadline
+          Commitment date
         </label>
         <Input
           id="deadline"
@@ -58,8 +58,12 @@ export function DeadlineForm({
         ) : (
           <CalendarClock className="size-4" />
         )}
-        Set deadline
+        Set commitment
       </Button>
+      <p className="w-full text-xs text-muted-foreground">
+        A voluntary commitment by your office. Shown publicly and tracked factually — not an
+        automatic deadline.
+      </p>
     </div>
   );
 }

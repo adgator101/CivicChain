@@ -4,7 +4,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Loader2, ImagePlus, X, CheckCircle2, Users, Copy } from "lucide-react";
 import { createReportAction, resolveReportDecisionAction } from "@/lib/actions/reports";
-import { categoryLabel, impactConfidencePct } from "@/lib/utils";
+import { categoryLabel } from "@/lib/utils";
 import { Category } from "@/generated/prisma/enums";
 import type { ClusterResult } from "@/types";
 import type { CreateReportInput } from "@/lib/validations/report";
@@ -222,8 +222,8 @@ export function ReportForm({ defaults }: { defaults: Defaults }) {
               />
               <p className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
                 <Users className="size-4" />
-                {result.reportCount} citizens have now reported this · Confidence{" "}
-                {impactConfidencePct(result.communityImpactScore)}%
+                {result.reportCount}{" "}
+                {result.reportCount === 1 ? "citizen has" : "citizens have"} now reported this
               </p>
             </div>
           )}

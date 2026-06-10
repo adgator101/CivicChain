@@ -58,7 +58,9 @@ export function RootCauseSuggestionCard({
 
   // The suggestion-bearing issue plus its AI-related issues form the cluster.
   const issueIds = Array.from(new Set([issueId, ...relatedIds]));
-  const confidencePct = Math.round(confidence * 100);
+  // Qualitative band rather than a fabricated-looking percentage.
+  const patternStrength =
+    confidence >= 0.85 ? "Strong pattern" : confidence >= 0.65 ? "Likely pattern" : "Possible pattern";
 
   function create(useTitle: string, useDescription: string) {
     execute({
@@ -91,11 +93,11 @@ export function RootCauseSuggestionCard({
   return (
     <Card className="border-l-4 border-violet-500">
       <CardContent className="space-y-3 pt-6">
-        {/* Top row: confidence + category */}
+        {/* Top row: pattern strength + category */}
         <div className="flex flex-wrap items-center gap-2">
           <Badge className="gap-1 border-transparent bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300">
             <Sparkles className="size-3" />
-            {confidencePct}% confidence
+            {patternStrength}
           </Badge>
           <Badge variant="secondary">{categoryLabel(category)}</Badge>
         </div>
