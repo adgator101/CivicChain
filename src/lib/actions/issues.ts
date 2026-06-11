@@ -7,10 +7,12 @@ import {
   requestAssignmentSchema,
   respondAssignmentSchema,
   verifyIssueSchema,
+  manualVerifySchema,
   createRootIssueSchema,
 } from "@/lib/validations/issue";
 import { prisma } from "@/lib/prisma";
 import { categoryToDepartment } from "@/lib/departments";
+import { VERIFY_BASIS } from "@/lib/verification";
 import { haversineDistance } from "@/lib/utils";
 import { IssueStatus, Role } from "@/generated/prisma/client";
 
@@ -223,6 +225,58 @@ export const updateIssueStatusAction = roleActionClient([
             }),
           ]
         : []),
+    ]);
+
+    return { issue: updated };
+  });
+
+// LOCAL_BODY_HEAD manual verification (SUBMITTED → VERIFIED) — an accountable
+// override of the weighted community threshold. The head must pick an explicit
+// basis and attest responsibility; both are written to the timeline so the
+// decision is auditable, never an anonymous one-click.
+export const manualVerifyIssueAction = roleActionClient([Role.LOCAL_BODY_HEAD])
+  .schema(manualVerifySchema)
+  .action(async ({ parsedInput, ctx }) => {
+    const head = await prisma.user.findUniqueOrThrow({
+      where: { id: String(ctx.user.id) },
+      select: { municipalityName: true, name: true },
+    });
+
+    const issue = await prisma.issue.findUniqueOrThrow({
+      where: { id: parsedInput.issueId },
+      select: { status: true, municipalityName: true, verifiedAt: true },
+    });
+    if (head.municipalityName && issue.municipalityName !== head.municipalityName) {
+      throw new Error("That issue is not in your municipality.");
+    }
+    if (issue.status !== IssueStatus.SUBMITTED) {
+      throw new Error("Only a submitted (unverified) issue can be manually verified.");
+    }
+
+    const basisLabel = VERIFY_BASIS[parsedInput.basis];
+    const note = parsedInput.note?.trim();
+    const content =
+      `Manually verified by ${head.name ?? "the municipal authority"} — ${basisLabel}.` +
+      (note ? ` Note: ${note}` : "");
+
+    const [updated] = await prisma.$transaction([
+      prisma.issue.update({
+        where: { id: parsedInput.issueId },
+        data: {
+          status: IssueStatus.VERIFIED,
+          verifiedAt: issue.verifiedAt ?? new Date(),
+          updatedAt: new Date(),
+        },
+      }),
+      prisma.issueUpdate.create({
+        data: {
+          issueId: parsedInput.issueId,
+          authorId: String(ctx.user.id),
+          content,
+          images: [],
+          statusChange: IssueStatus.VERIFIED,
+        },
+      }),
     ]);
 
     return { issue: updated };
@@ -561,22 +615,39 @@ export const cascadeResolveAction = roleActionClient([Role.LOCAL_BODY_HEAD])
     return { resolved: targetIds.length };
   });
 
-// STORY-015: HEAD overrides a wrong AI/rule cascade link. Removes the directed
-// link into this downstream issue and detaches it from the chain.
-export const removeCascadeLinkAction = roleActionClient([Role.LOCAL_BODY_HEAD])
+// STORY-015: a wrong AI/rule cascade link is overridden by a human. Removes the
+// directed link into this downstream issue and detaches it from the chain.
+//
+// Who can do this:
+//   - LOCAL_BODY_HEAD — any issue in their municipality.
+//   - Section head (LOCAL_BODY_EMPLOYEE with isSectionHead) — only when the
+//     downstream issue belongs to their own section (category → department).
+// This lets a department head prune mis-cascaded issues from their own queue
+// while the municipal executive retains full reach. AI suggestions stay
+// human-reversible, consistent with the platform's accountability rule.
+export const removeCascadeLinkAction = roleActionClient([
+  Role.LOCAL_BODY_HEAD,
+  Role.LOCAL_BODY_EMPLOYEE,
+])
   .schema(z.object({ downstreamIssueId: z.string().min(1) }))
   .action(async ({ parsedInput, ctx }) => {
-    const head = await prisma.user.findUniqueOrThrow({
+    const actor = await prisma.user.findUniqueOrThrow({
       where: { id: String(ctx.user.id) },
-      select: { municipalityName: true },
+      select: { role: true, municipalityName: true, department: true, isSectionHead: true },
     });
 
     const issue = await prisma.issue.findUniqueOrThrow({
       where: { id: parsedInput.downstreamIssueId },
-      select: { municipalityName: true },
+      select: { municipalityName: true, category: true },
     });
-    if (head.municipalityName && issue.municipalityName !== head.municipalityName) {
+    if (actor.municipalityName && issue.municipalityName !== actor.municipalityName) {
       throw new Error("That issue is not in your municipality.");
+    }
+    if (
+      actor.role === Role.LOCAL_BODY_EMPLOYEE &&
+      (!actor.isSectionHead || actor.department !== categoryToDepartment(issue.category))
+    ) {
+      throw new Error("You can only detach issues that belong to your own section.");
     }
 
     await prisma.$transaction([
@@ -587,7 +658,71 @@ export const removeCascadeLinkAction = roleActionClient([Role.LOCAL_BODY_HEAD])
         where: { id: parsedInput.downstreamIssueId },
         data: { chainRootIssueId: null },
       }),
+      prisma.issueUpdate.create({
+        data: {
+          issueId: parsedInput.downstreamIssueId,
+          authorId: String(ctx.user.id),
+          content: "Removed from its cascade chain — flagged as not actually caused by the linked upstream issue.",
+          images: [],
+        },
+      }),
     ]);
 
     return { removed: true };
+  });
+
+// Completely undo a cascade chain: dissolve every causal link rooted at a given
+// issue and detach all member issues. A cascade can span several sections
+// (a blocked drain → road flooding → garbage → dengue risk), so only the
+// LOCAL_BODY_HEAD — who sees the whole municipality — can tear down an entire
+// chain. Section heads use removeCascadeLinkAction to prune their own section.
+export const undoCascadeChainAction = roleActionClient([Role.LOCAL_BODY_HEAD])
+  .schema(z.object({ rootIssueId: z.string().min(1) }))
+  .action(async ({ parsedInput, ctx }) => {
+    const head = await prisma.user.findUniqueOrThrow({
+      where: { id: String(ctx.user.id) },
+      select: { municipalityName: true },
+    });
+
+    const root = await prisma.issue.findUniqueOrThrow({
+      where: { id: parsedInput.rootIssueId },
+      select: { municipalityName: true },
+    });
+    if (head.municipalityName && root.municipalityName !== head.municipalityName) {
+      throw new Error("That issue is not in your municipality.");
+    }
+
+    // Members of the chain = the root itself plus every issue pointing at it.
+    const members = await prisma.issue.findMany({
+      where: {
+        OR: [{ id: parsedInput.rootIssueId }, { chainRootIssueId: parsedInput.rootIssueId }],
+      },
+      select: { id: true },
+    });
+    const memberIds = members.map((m) => m.id);
+
+    await prisma.$transaction([
+      prisma.issueChainLink.deleteMany({
+        where: {
+          OR: [
+            { upstreamIssueId: { in: memberIds } },
+            { downstreamIssueId: { in: memberIds } },
+          ],
+        },
+      }),
+      prisma.issue.updateMany({
+        where: { id: { in: memberIds } },
+        data: { chainRootIssueId: null },
+      }),
+      prisma.issueUpdate.createMany({
+        data: memberIds.map((id) => ({
+          issueId: id,
+          authorId: String(ctx.user.id),
+          content: "Cascade chain dissolved by the municipal head — these issues are no longer treated as causally linked.",
+          images: [],
+        })),
+      }),
+    ]);
+
+    return { undone: true, detached: memberIds.length };
   });

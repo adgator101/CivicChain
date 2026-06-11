@@ -51,6 +51,28 @@ export const verifyIssueSchema = z.object({
   proofLongitude: z.number().optional(),
 });
 
+// LOCAL_BODY_HEAD manual verification (SUBMITTED → VERIFIED). Requires an explicit
+// basis and an attestation so the override is accountable, not a cheap one-click.
+export const manualVerifySchema = z
+  .object({
+    issueId: id,
+    basis: z.enum([
+      "FIELD_INSPECTION",
+      "CREDIBLE_EVIDENCE",
+      "MULTIPLE_REPORTS",
+      "OFFICIAL_RECORD",
+      "OTHER",
+    ]),
+    note: z.string().max(500).optional(),
+    attested: z.literal(true, {
+      message: "You must confirm responsibility for this verification.",
+    }),
+  })
+  .refine((v) => v.basis !== "OTHER" || (v.note && v.note.trim().length >= 5), {
+    message: "Please explain the basis when choosing Other.",
+    path: ["note"],
+  });
+
 export const createRootIssueSchema = z.object({
   title: z.string().min(5).max(120),
   description: z.string().min(10).max(1000),
@@ -75,4 +97,5 @@ export type AssignIssueInput = z.infer<typeof assignIssueSchema>;
 export type RequestAssignmentInput = z.infer<typeof requestAssignmentSchema>;
 export type RespondAssignmentInput = z.infer<typeof respondAssignmentSchema>;
 export type VerifyIssueInput = z.infer<typeof verifyIssueSchema>;
+export type ManualVerifyInput = z.infer<typeof manualVerifySchema>;
 export type CreateRootIssueInput = z.infer<typeof createRootIssueSchema>;
