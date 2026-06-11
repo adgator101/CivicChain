@@ -24,6 +24,8 @@ import { RequestStatePanel } from "./request-officer-dialog";
 import { AssignmentRequestActions } from "./assignment-request-actions";
 import { StatusUpdateForm } from "./status-update-form";
 import { UpdateDueDateForm } from "./update-due-date-form";
+import { DetachReportButton } from "./detach-report-button";
+import { VerifyIssueDialog } from "./verify-issue-dialog";
 import type {
   Category,
   Department,
@@ -47,6 +49,8 @@ type DetailIssue = {
   priority: Priority;
   communityImpactScore: number;
   affectedCitizenCount: number;
+  confirmCount: number;
+  disputeCount: number;
   address: string | null;
   wardNumber: number | null;
   municipalityName: string | null;
@@ -134,6 +138,13 @@ export function AuthorityIssueDetailPanel({
     detail.status === "VERIFIED" &&
     !!currentUserId &&
     detail.requestedToId === currentUserId;
+
+  // HEAD (any issue) or section head (own section) can un-merge a wrongly
+  // clustered report — only meaningful when more than one report is attached.
+  const canDetachReports =
+    !!detail &&
+    detail.reports.length > 1 &&
+    (isHead || (!!sectionDept && sectionDept === categoryToDepartment(detail.category)));
 
   const place = detail
     ? [
@@ -235,6 +246,22 @@ export function AuthorityIssueDetailPanel({
               </h3>
 
               <div className="space-y-2">
+                {/* Unverified issue — HEAD verifies after reviewing evidence below. */}
+                {isHead && detail.status === "SUBMITTED" && (
+                  <div className="flex items-center justify-between gap-2 rounded-lg bg-amber-500/10 px-3 py-2 ring-1 ring-amber-500/20">
+                    <span className="text-sm text-amber-700 dark:text-amber-400">
+                      Awaiting verification
+                    </span>
+                    <VerifyIssueDialog
+                      issueId={detail.id}
+                      issueTitle={detail.title}
+                      affectedCitizenCount={detail.affectedCitizenCount}
+                      confirmCount={detail.confirmCount}
+                      disputeCount={detail.disputeCount}
+                    />
+                  </div>
+                )}
+
                 {detail.assignedTo ? (
                   <p className="flex items-center gap-1.5 text-sm">
                     <UserCheck className="size-4 text-muted-foreground" />
@@ -315,6 +342,11 @@ export function AuthorityIssueDetailPanel({
                               className="size-16 rounded-md border object-cover"
                             />
                           ))}
+                        </div>
+                      )}
+                      {canDetachReports && (
+                        <div className="flex justify-end border-t pt-1.5">
+                          <DetachReportButton reportId={report.id} />
                         </div>
                       )}
                     </div>

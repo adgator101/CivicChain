@@ -21,6 +21,7 @@ import { StatusUpdateForm } from "@/components/civic/status-update-form";
 import { UpdateDueDateForm } from "@/components/civic/update-due-date-form";
 import { CascadeResolveCard } from "@/components/civic/cascade-resolve-card";
 import { CascadeLinkBanner } from "@/components/civic/cascade-link-banner";
+import { DetachReportButton } from "@/components/civic/detach-report-button";
 
 const ALLOWED_NEXT: Partial<Record<IssueStatus, IssueStatus[]>> = {
   ASSIGNED: [IssueStatus.IN_PROGRESS],
@@ -93,6 +94,12 @@ export default async function AuthorityIssueDetailPage({
   const canRespond =
     issue.status === IssueStatus.VERIFIED && issue.requestedToId === user.id;
   const cascadeLink = issue.downstreamLinks[0] ?? null;
+  // HEAD can detach any issue; a section head can detach issues in their own section.
+  const canRemoveCascade =
+    isHead ||
+    (!!me?.isSectionHead && me.department === categoryToDepartment(issue.category));
+  // Same permission gates un-merging a wrongly clustered report (needs >1 report).
+  const canDetachReports = canRemoveCascade && issue.reports.length > 1;
   const downstreamOpen =
     issue.status === IssueStatus.RESOLVED
       ? await getDownstreamOpenIssues(issue.id)
@@ -161,7 +168,7 @@ export default async function AuthorityIssueDetailPage({
           source={cascadeLink.source}
           confidence={cascadeLink.confidence}
           downstreamIssueId={issue.id}
-          canRemove={isHead}
+          canRemove={canRemoveCascade}
           hrefBase="/authority/issues"
         />
       )}
@@ -266,6 +273,11 @@ export default async function AuthorityIssueDetailPage({
                         className="size-20 rounded-md border object-cover"
                       />
                     ))}
+                  </div>
+                )}
+                {canDetachReports && (
+                  <div className="flex justify-end border-t pt-1.5">
+                    <DetachReportButton reportId={report.id} />
                   </div>
                 )}
               </Card>
