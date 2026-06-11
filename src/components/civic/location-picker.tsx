@@ -12,6 +12,12 @@ import { MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_URL } from "@/lib/mapbox";
 const DEFAULT_LAT = 27.7172;
 const DEFAULT_LNG = 85.324;
 
+// Nepal bounding box [SW, NE]
+const NEPAL_BOUNDS: [[number, number], [number, number]] = [
+  [80.058, 26.347],
+  [88.201, 30.447],
+];
+
 export type LatLng = { latitude: number; longitude: number };
 
 export function LocationPicker({
@@ -103,6 +109,9 @@ export function LocationPicker({
           mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
           mapStyle={MAPBOX_STYLE_URL}
           style={{ width: "100%", height: "100%" }}
+          maxBounds={NEPAL_BOUNDS}
+          minZoom={6}
+          maxZoom={18}
         >
           <NavigationControl position="top-right" />
           {value && (
