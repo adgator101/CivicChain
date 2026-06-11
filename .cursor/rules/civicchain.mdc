@@ -76,8 +76,10 @@ Cannot:
 
 ## LOCAL_BODY_EMPLOYEE
 
-Ward-level or municipality-level employee. Acts under direction of LOCAL_BODY_HEAD.
+Ward-level or municipality-level employee. Deployed to a specific ward (or municipality-wide).
 Maps to: ward secretary, palika technical officer, sanitation officer, etc.
+
+Each employee belongs to a **section (शाखा)** and may be designated **section head (शाखा प्रमुख)**.
 
 Can:
 
@@ -87,26 +89,34 @@ Can:
 * Post updates to the issue timeline
 * Request clarification from citizens
 
+If designated **section head**, also can:
+
+* View verified issues for their section's categories in a dedicated queue
+* Assign those issues to officers within their section
+
 Cannot:
 
-* Assign issues to other officers
+* Assign issues to other officers (unless section head, and only within their section)
 * Create root issues
 * View issues outside their municipality
 
 ## LOCAL_BODY_HEAD
 
-Head of a local body (ward chairperson, municipal executive officer, etc.).
-Scoped to their municipality. The primary decision-maker at local level.
+**Municipal executive** (mayor's office / Chief Administrative Officer). Scoped to the whole
+municipality — NOT a ward chairperson. The technical workforce is hired and deployed at the
+municipality level, so the head manages all staff across all wards.
 
 Can:
 
-* Assign issues to LOCAL_BODY_EMPLOYEE
+* Provision and manage staff (`/authority/team`) — create employee accounts, assign to sections and wards, designate section heads
 * Monitor all issues in their municipality
-* Review and set deadlines
-* View escalated issues
+* Verify issues manually (SUBMITTED → VERIFIED)
+* Assign issues directly to any officer (override when a section has no head)
+* Review and set commitment dates
+* View attention flags
 * Accept or reject AI root cause suggestions
 * Create and manage Root Issues
-* View municipality-level metrics and heatmap
+* View municipality-level metrics
 
 Cannot:
 
@@ -161,7 +171,7 @@ Scoping rules:
 
 # Primary Workflow
 
-Citizen submits report -> AI categorizes + checks for duplicates -> Report attaches to existing Issue OR creates new Issue -> Community verifies issue (3 verifications OR LOCAL_BODY_HEAD manual) -> Issue assigned to LOCAL_BODY_EMPLOYEE by LOCAL_BODY_HEAD -> Employee investigates -> Employee uploads updates -> Employee marks resolved -> Citizen + community verify resolution -> Issue closed OR Issue reopened
+Citizen submits report -> AI categorizes + checks for duplicates -> Report attaches to existing Issue OR creates new Issue -> Community verifies issue (weighted confirmations ≥ 3.0 OR LOCAL_BODY_HEAD manual) -> Issue moves into the owning section's queue (category determines section automatically) -> Section head assigns to an officer in their section (HEAD can override directly) -> Employee investigates -> Employee uploads updates -> Employee marks resolved -> Citizen + community verify resolution -> Issue closed OR Issue reopened
 
 If AI detects root cause pattern across 3+ related issues -> Suggestion stored on each Issue -> LOCAL_BODY_HEAD reviews suggestion -> Accepts/edits/rejects -> Root Issue created and issues linked
 
@@ -190,30 +200,41 @@ When a report is submitted, the system queries: are there existing open Issues w
 
 If no geospatial match is found within 50m, Gemini compares the new report text against nearby open Issues:
 
-* Similarity ≥ 0.80 → merge: attach to parent Issue, no new Issue created
+* Similarity ≥ 0.80 **AND within `SEMANTIC_MERGE_RADIUS_METERS` (200m)** → merge: attach to parent Issue, no new Issue created
+* Similarity ≥ 0.80 but **beyond 200m** → do NOT silently merge; fall through to the prompt
 * Similarity 0.50–0.79 → prompt citizen: "A similar issue exists nearby — attach your report to it, or submit separately?"
 * Similarity < 0.50 → create new Issue
 
-Example: "Bhrikuti Chowk road ma thulo khaldo cha" and "Near Bhrikuti the road has a big hole" → 91% semantic similarity → merged into parent Issue.
+> **Why the 200m cap on semantic merge (STORY-008/dedup fix):** a high text-similarity score
+> alone is not enough to silently merge two reports that are far apart — e.g. a "dengue
+> outbreak" report 1.5km away reads as textually identical but is a different locality.
+> Semantic auto-merge therefore requires *both* strong text similarity *and* spatial
+> plausibility (≤200m). Anything similar-but-distant becomes a citizen prompt, never a silent
+> merge. This keeps the gray-zone-needs-consent principle from being bypassed by text alone.
+
+Example: "Bhrikuti Chowk road ma thulo khaldo cha" and "Near Bhrikuti the road has a big hole"
+≈ strong semantic similarity, same locality → merged into parent Issue.
 
 ### Step 3 — Community Impact Score
 
 Each verified related report increases the parent Issue's `communityImpactScore`. Priority is automatically elevated based on thresholds:
 
-| Reports | Confidence | Action |
-|---------|------------|--------|
-| 1       | 30%        | No change |
-| 3       | 60%        | No change |
-| 8       | 88%        | Auto-elevate to HIGH priority |
-| 15+     | 98%        | Auto-elevate to CRITICAL, LOCAL_BODY_HEAD notified |
+| Reports | Impact score | Action |
+|---------|-------------|--------|
+| 1       | 0.30        | No change |
+| 3       | 0.60        | No change |
+| 8       | 0.88        | Auto-elevate to HIGH priority |
+| 15+     | 0.98        | Auto-elevate to CRITICAL, LOCAL_BODY_HEAD notified |
 
-Priority auto-elevation (8+ or 15+ reports) is the ONLY exception where AI influences priority without human approval — because it is purely arithmetic, not predictive.
+Priority auto-elevation (8+ or 15+ reports) is the ONLY exception where arithmetic influences priority without human approval — because it is based on a count, not a prediction.
+
+**Do NOT display a "% confidence" label from this score.** The score is used to colour the progress bar and drive priority elevation. The bar and a plain "N citizens affected" count are the only citizen-facing representations.
 
 ## What the Officer Sees
 
 Instead of 14 separate tickets, the officer sees ONE aggregated Issue:
 
-> "Road Damage — Bhrikuti Chowk | 14 citizens affected | Confidence: 94% | HIGH PRIORITY"
+> "Road Damage — Bhrikuti Chowk | 14 citizens affected | HIGH PRIORITY | Open 3d"
 
 ## Database Fields Required on Issue
 
@@ -229,7 +250,100 @@ Both checks happen synchronously during report submission, before any Issue reco
 
 ---
 
-# Key Innovation: ROOT CAUSE INTELLIGENCE
+---
+
+# Priority Assignment (How LOW / MEDIUM / HIGH / CRITICAL is decided)
+
+An issue's `priority` is set by **exactly two inputs** — nothing else changes it.
+
+## 1. Initial AI suggestion (once, at creation)
+
+When a **new** Issue is created, Gemini (`src/lib/ai/analyze-report.ts`) reads the report's
+title, description, and category and returns a `priority` (`LOW | MEDIUM | HIGH | CRITICAL`) plus
+a one-sentence `priorityReason`. If the AI call fails, the issue defaults to `MEDIUM`. This is
+the only judgment-based step and it happens once, at creation. The reason may be shown; the
+priority is shown as a badge — **never as a "% confidence"**.
+
+## 2. Arithmetic auto-elevation by report volume
+
+As duplicate reports cluster onto an issue, `computeImpact(reportCount)` (`src/lib/utils.ts`)
+raises priority purely by count:
+
+| Reports on the issue | Floor priority |
+|---|---|
+| ≥ 8  | HIGH |
+| ≥ 15 | CRITICAL |
+
+Applied in `attachReportToIssue` via `maxPriority(current, elevated)` — it **only ever raises**
+priority, never lowers a higher existing value. This is the ONE place arithmetic changes
+priority without a human, and it is defensible because it is a count of affected citizens, not
+a prediction.
+
+## What does NOT change priority
+
+- Community verification and resolution disputes — independent of priority.
+- The age/attention flags (`needsAttention`) — factual age only, never touch priority.
+- There is **no manual priority editor** in the UI today. (If one is added, it should use
+  `maxPriority` semantics so a human can raise but the system never silently overrides a human.)
+
+**Code:** AI suggestion → `analyze-report.ts`; elevation → `computeImpact` + `maxPriority` in
+`utils.ts`; both applied in `createNewIssueFromReport` (initial) and `attachReportToIssue`
+(elevation) in `src/lib/actions/reports.ts`.
+
+---
+
+# Community Verification — Weighted & Geo-Proofed (STORY-012)
+
+Verification is **credible by construction**, not a raw headcount, and is never shown as a
+score.
+
+## Locality view & verify queue
+
+- The citizen ward feed (`/dashboard`) has a **List ↔ Map toggle** (`citizen-issue-map.tsx`)
+  so residents can see nearby issues to confirm.
+- A **`/verify` queue** lists nearby `SUBMITTED` issues (same municipality, ward-first)
+  awaiting verification.
+
+## Weighting model
+
+Each CONFIRM/DISPUTE carries a weight:
+
+| Signal | Weight |
+|---|---|
+| Verifier in the issue's **ward** | 1.0 |
+| Same municipality, different ward | 0.5 |
+| Outside the municipality | not allowed to verify |
+| **+ geotagged photo proof within 200m of the issue** | × 1.5 |
+
+- Issue becomes **VERIFIED** when `confirmWeight − disputeWeight ≥ 3.0` (sets `verifiedAt`).
+- A RESOLVED issue **REOPENS** when `disputeWeight > confirmWeight`.
+- `Issue.confirmCount` / `disputeCount` remain raw counts for display; weighted sums are
+  computed in `verifyIssueAction` from `IssueVerification` rows.
+
+## Geotagged proof
+
+- Proof capture uses `capture="environment"` to nudge the device camera.
+- The web cannot hard-block gallery selection, so the **real gate is server-side geo
+  verification**: proof location (EXIF GPS via `exifr`, else device geolocation at submit)
+  must be within **200m** of the issue. A stale gallery photo fails this and earns no boost.
+
+## Presentation = factual makeup, never a score
+
+Show "Verified by N nearby residents · M with photo evidence" — **never** a percentage.
+`IssueVerification` carries `weight`, `isLocal`, and `proofImages` for this.
+
+---
+
+# Citizen Profile (STORY-016)
+
+`/profile` (CITIZEN) lists the citizen's own reported issues with at-a-glance stats (total
+reported + a status breakdown), reachable from the avatar dropdown. Factual only — no
+fabricated scores or badges.
+
+The citizen **issue detail** page (`/issues/[id]`) is brand-grounded: a `pennant-clip` nilo
+hero, soft-tint context banners (no colored left-border cards), a connector-line progress
+stepper built from real phase timestamps, a status-coloured activity timeline with author
+avatars, and the officer contact card. See STORY-013 (tracker/officer card) and STORY-016.
 
 The most important feature.
 
@@ -252,11 +366,89 @@ Trigger conditions for AI root cause analysis:
 Duplicate detection order (see "Duplicate Report Clustering" section for full details):
 
 * Geospatial match within 50m (same category, not RESOLVED) → attach to parent Issue immediately
-* Semantic similarity ≥ 0.80 → attach to parent Issue, no new Issue created
-* Semantic similarity 0.50–0.79 → prompt citizen to choose
+* Semantic similarity ≥ 0.80 **and within 200m** → attach to parent Issue, no new Issue created
+* Semantic similarity ≥ 0.80 but beyond 200m, or 0.50–0.79 → prompt citizen to choose
 * Semantic similarity < 0.50 → create new Issue
 
-Root cause suggestion only surfaced to LOCAL_BODY_HEAD if confidence > 0.65.
+Root cause suggestion only surfaced to LOCAL_BODY_HEAD if AI confidence > 0.65.
+The confidence value is **not displayed as a percentage** to users — show a qualitative band
+("Strong pattern" / "Likely pattern") instead.
+
+---
+
+# Cascading Issue Chains (STORY-010 → STORY-014 → STORY-015)
+
+Beyond flat Root Issue grouping, CivicChain models **directed causal relationships** between
+individual issues — a blocked drain causes road flooding causes garbage accumulation causes
+standing water causes a mosquito/dengue risk.
+
+## How detection works (AI-driven — STORY-014)
+
+Detection is **AI-driven**, not a static lookup table. When a new Issue is created, the system
+gathers nearby open issues (within **500m** and **14 days**) as candidates and asks Gemini
+(`src/lib/ai/detect-cascade.ts`, `detectCascadeWithAI`) to reason about whether the new issue
+is a downstream *effect* of one of them, returning the single most likely upstream cause (or
+null) plus a one-sentence `reasoning` and an internal `confidence`.
+
+> **History:** STORY-010 originally shipped a static `src/lib/causal-graph.ts` category graph
+> (a hand-listed `CAUSAL_EDGES` table of upstream→downstream category pairs). STORY-014
+> **deleted that file** and replaced it with the Gemini call, because real civic chains are
+> longer and more varied than any fixed table can enumerate. **Do not reintroduce
+> `causal-graph.ts`, `CAUSAL_EDGES`, or `detectCascadeLink`.**
+
+**Fallback (graceful degradation):** if the Gemini call fails (no key, network error, bad
+JSON), a minimal pure-function rule fires — the closest open issue of the **same category**
+within 500m and 14 days, or null. This is a safety net only, never the primary logic.
+
+Detection runs best-effort inside the new-issue path — a failure never blocks report
+submission.
+
+## Provenance & reversibility (STORY-015)
+
+Every link records **why** and **how** it was made:
+- `reason` — the AI's one-sentence causal explanation (or the fallback rule's note).
+- `source` — `"ai"` when Gemini detected it, `"rule"` when the same-category fallback fired.
+
+The **LOCAL_BODY_HEAD** can undo a wrong link via `removeCascadeLinkAction` ("Not related"),
+which deletes the `IssueChainLink` and clears `chainRootIssueId` on the downstream issue —
+humans stay in control of AI suggestions, consistent with the platform's accountability rule.
+
+## Schema
+
+```prisma
+model IssueChainLink {
+  id                String   @id @default(cuid())
+  upstreamIssueId   String
+  downstreamIssueId String
+  detectedAt        DateTime @default(now())
+  confidence        Float    @default(0.7)   // stored internally — NEVER shown as a %
+  reason            String?                   // AI reasoning or rule note
+  source            String   @default("ai")   // "ai" | "rule"
+  @@unique([upstreamIssueId, downstreamIssueId])
+}
+```
+
+Issue also carries: `chainRootIssueId String?`, `upstreamLinks IssueChainLink[]`,
+`downstreamLinks IssueChainLink[]`.
+
+## UI
+
+- **Authority dashboard** shows a "Cascading Complaints" panel (HEAD only) — alerts grouped
+  by chain root, each linking to the root issue.
+- **Issue detail** (authority + citizen) shows a soft amber `CascadeLinkBanner` —
+  "May be caused by: [upstream]" — with a provenance badge ("AI-detected" / "Auto-linked"),
+  the reason sentence, and a **qualitative strength band** (Strong / Likely / Possible),
+  **never a %**. The HEAD additionally sees a "Not related" undo control; citizens/employees
+  see the provenance but cannot undo.
+- When an upstream issue is RESOLVED and still has open downstream issues, the HEAD is
+  offered a **Cascade Resolve** card (`cascade-resolve-card.tsx`) to batch-mark downstream
+  issues resolved, with a provenance note. Resolved downstream issues remain
+  community-disputable (REOPENED path).
+
+## Coexistence with RootIssue
+
+Chain links are separate from the flat RootIssue grouping — both can coexist. Chains are
+directed (cause → effect); RootIssues are flat groupings of symptoms under one systemic title.
 
 ---
 
@@ -321,7 +513,7 @@ Maps:
 
 AI:
 
-* Google Gemini API (gemini-2.0-flash)
+* Google Gemini API (model: `gemini-3.1-flash-lite` — set in `src/lib/gemini.ts`)
 * Called server-side only, never from client
 * Structured JSON output via response_mime_type: "application/json"
 
@@ -386,6 +578,10 @@ All Issues and Reports must store: wardNumber, municipalityName, districtName, p
 
 Issues must also store: reportCount (Int, default 1), communityImpactScore (Float, default 0.3), affectedCitizenCount (Int, default 1).
 
+Phase timestamps: verifiedAt, assignedAt, resolvedAt (DateTime, nullable) — set on the relevant transitions, used for phase-split performance analytics.
+
+Causal chain fields: chainRootIssueId (String, nullable), upstreamLinks / downstreamLinks (IssueChainLink[] relations) — see "Cascading Issue Chains" section.
+
 ---
 
 # Issue Status Lifecycle
@@ -393,7 +589,7 @@ Issues must also store: reportCount (Int, default 1), communityImpactScore (Floa
 Only allow these transitions. Never bypass them.
 
 SUBMITTED → VERIFIED (3 citizen verifications OR LOCAL_BODY_HEAD manual action)
-VERIFIED → ASSIGNED (LOCAL_BODY_HEAD assigns to employee)
+VERIFIED → ASSIGNED (section head assigns within their section; LOCAL_BODY_HEAD can assign directly as override)
 ASSIGNED → IN_PROGRESS (LOCAL_BODY_EMPLOYEE starts work)
 IN_PROGRESS → RESOLVED (LOCAL_BODY_EMPLOYEE marks complete with evidence)
 RESOLVED → REOPENED (majority of verifiers dispute resolution)
@@ -401,28 +597,97 @@ REOPENED → IN_PROGRESS (employee re-acknowledges)
 
 ---
 
-# Escalation Rules
+# Attention Rules (Age-Based — NOT SLA-Based)
 
 Computed on page load. No background jobs.
 
-Status stuck at SUBMITTED > 48 hours → flag for LOCAL_BODY_HEAD (unverified queue)
-Status stuck at VERIFIED > 72 hours → alert LOCAL_BODY_HEAD (unassigned)
-Status stuck at ASSIGNED > 7 days → alert LOCAL_BODY_HEAD + employee
-Status stuck at IN_PROGRESS > 14 days → critical flag (visible on EXECUTIVE_BODY dashboard too)
+**There are no SLAs and no priority multipliers.** These are factual "needs attention" flags
+based on how long an issue has sat in its current status. They never claim a deadline was
+missed or promise a fix date.
 
-Priority multipliers on SLA:
+Attention thresholds (plain days, no multiplier):
 
-* CRITICAL: 0.25x (e.g. 3.5 days for IN_PROGRESS)
-* HIGH: 0.5x
-* MEDIUM: 1x (default)
-* LOW: 2x
+| Status | Threshold | Who owns this wait |
+|--------|-----------|-------------------|
+| SUBMITTED | > 3 days | Community / HEAD (unverified too long) |
+| VERIFIED | > 3 days | Section head / HEAD (sat unassigned) |
+| ASSIGNED / IN_PROGRESS / REOPENED | > 14 days | Assigned officer |
 
-Store escalatedAt on Issue when first threshold is crossed.
-dueDate can be manually set by LOCAL_BODY_HEAD to override default SLA.
+When an issue crosses its threshold:
+- The `AttentionBadge` turns amber; at 2× threshold it turns red.
+- A reason label is shown ("Unverified 5d", "Unassigned 3d", "Open 17d").
+- The dashboard "Needs Attention" section surfaces it and sorts by days-in-status.
+
+**Commitment date** (stored as `dueDate`): a voluntary promise by the LOCAL_BODY_HEAD or
+section head. If the date has passed, the badge shows "Commitment Nd ago" — a factual record
+of a real human commitment, separate from the attention threshold.
+
+**Phase timestamps** (on Issue): `verifiedAt`, `assignedAt`, `resolvedAt` — used for
+phase-split performance analytics on the Team page.
+
+Do NOT reintroduce `SLA_HOURS`, `PRIORITY_MULTIPLIERS`, `computeEscalation`, or
+`impactConfidencePct`. Those have been deleted. Use `needsAttention()` from `src/lib/utils.ts`.
+
+# Authority Dashboard — Map-First Interface (STORY-011)
+
+The authority dashboard (`/authority/dashboard`) is a **full-viewport map-first workspace**,
+not a card-based page. The map fills the entire screen below the nav; all content floats on
+top of it — Google Maps / Uber style.
+
+## Layout structure
+
+- **`AuthorityIssueMap`** (`src/components/civic/authority-issue-map.tsx`) is the root
+  component. It renders a full-viewport Mapbox map (`h-[calc(100vh-3.5rem)]`) with:
+  - A **floating left panel** (Google-Maps-style): header + jurisdiction, stat chips, status
+    filter chips, role insight panels passed as `children`, and a scrollable results list.
+  - A **bottom-right detail card** when a marker or list row is selected (title, badges,
+    community impact, attention badge, Open / Assign actions).
+  - A **priority legend** at the bottom center.
+  - Marker click or list-row click → `flyTo` the location + open detail card.
+- **Authority layout** (`src/app/authority/layout.tsx`) is full-bleed (`flex-1` only, no
+  `max-w` or padding) so the dashboard can occupy the full viewport. Other authority pages
+  (`/authority/team`, `/authority/issues/[id]`) carry their own `mx-auto max-w-* px-4 py-6`
+  centered wrapper.
+
+## Map content
+
+- Markers = role-scoped issue set (HEAD → all municipality issues; EMPLOYEE/section head →
+  their assigned issues). Coloured by priority, sized by community impact.
+- Status filter chips in the left panel filter markers client-side.
+- Insight panels (root cause, cascading, verification queue, section queue, needs-attention)
+  are rendered inside the left panel via the `children` prop — they live in the **server
+  component** dashboard page, so data fetching and RBAC stay server-side.
+
+## When no Mapbox token
+
+The full-viewport area shows a "set token" message. The left panel and all insight panels
+remain fully functional.
 
 ---
 
-# AI Usage Rules
+`LOCAL_BODY_HEAD` is the **municipal executive**, managing all staff across the municipality.
+Staff are organised into **sections (शाखा)**. Use the `Department` enum (in `@/generated/prisma/client`):
+
+| `Department` | Palika Section | Category values it owns |
+|---|---|---|
+| `TECHNICAL_INFRASTRUCTURE` | Prabidhik / Engineering | ROAD, INFRASTRUCTURE |
+| `WATER_SANITATION` | Khanepani tatha Sarsafai | WATER_SANITATION |
+| `ENVIRONMENT_WASTE` | Fohor / Watawaran | WASTE_MANAGEMENT, ENVIRONMENT |
+| `ELECTRICITY_LIGHTING` | Batti / Street lighting | ELECTRICITY |
+| `DISASTER_PUBLIC_SAFETY` | Vipad / Suraksha | PUBLIC_SAFETY |
+| `ADMINISTRATION` | Prashasan / General | OTHER |
+
+Use `categoryToDepartment(category)` from `src/lib/departments.ts` for the mapping.
+
+Each employee has `department`, `wardNumber` (deployment ward), `isActive`, `isSectionHead` fields.
+One section head per section. Promoting one demotes the previous.
+
+**Assignment is two-tier.** The section head receives VERIFIED issues for their section and
+assigns to officers within it. The HEAD assigns directly as an override. Neither auto-assigns.
+Enforce this in `assignIssueAction` — section heads can only assign issues in their section
+to officers in their section.
+
+---
 
 AI may:
 
@@ -430,7 +695,8 @@ AI may:
 * Suggest priority (LOW / MEDIUM / HIGH / CRITICAL)
 * Detect semantic duplicates (similarity score + matched issueId) — only after geospatial check finds no match
 * Suggest root causes (title + reason + confidence + related issue IDs)
-* Auto-elevate priority to HIGH when reportCount ≥ 8 (arithmetic, not predictive — this is the one exception to the human-approval rule)
+* Detect cascading causal links (upstream cause for a new issue + reasoning) — see "Cascading Issue Chains"; stored as an `IssueChainLink`, reversible by the HEAD
+* Auto-elevate priority to HIGH when reportCount ≥ 8, CRITICAL when ≥ 15 (arithmetic on a count — the one exception to the human-approval rule)
 
 AI must NEVER:
 
@@ -438,6 +704,7 @@ AI must NEVER:
 * Automatically assign responsibility
 * Automatically escalate issues
 * Create any database record directly
+* Output a "% confidence" number for display — AI confidence is either stored internally (for threshold checks like 0.65) or shown as a qualitative band in UI
 
 Human validation is always required for all AI suggestions.
 
@@ -460,6 +727,8 @@ Avoid:
 * Fancy startup aesthetics
 * Overdesigned dashboards
 * Gradients on functional elements
+* "% confidence" or "% certainty" labels — these fabricate precision. Show counts, durations, and status badges instead.
+* "Overdue" wording tied to an invented deadline — use factual age ("Open 12d", "Unassigned 5d")
 
 Prefer:
 
@@ -474,12 +743,15 @@ Prefer:
 
 The demo should emphasize:
 
-1. Multiple reports cluster into one Issue — officer sees "14 citizens affected | Confidence: 94% | HIGH PRIORITY" instead of 14 tickets
-2. Community Impact Score climbing as more reports attach (show the score updating live)
-3. Root cause suggestion (AI pattern detection across Issues)
-4. LOCAL_BODY_HEAD accepts root cause and creates Root Issue
-5. Escalation timer shown on dashboard
-6. EXECUTIVE_BODY national heatmap showing all active issues
+1. Multiple reports cluster into one Issue — officer sees "14 citizens affected | HIGH PRIORITY | Open 3d" instead of 14 tickets
+2. Community impact bar rising as more reports attach (the bar — no % label)
+3. Root cause suggestion (AI pattern detection across Issues) shown as "Strong pattern", HEAD accepts and creates Root Issue
+4. Cascading chain: submit Blocked Drain → Road Flooding → Garbage nearby → HEAD dashboard shows "3 linked issues in Ward 7" → fix root, cascade-resolve downstream
+5. Two-tier assignment: verified water issue → section head's queue → section head assigns to an officer in their section
+6. Map-first authority dashboard: all issues visible as markers on the municipality map; click marker → detail panel with Assign action
+7. Needs Attention flags on dashboard (factual "Unassigned 5d", "Open 17d")
+8. Team performance panel: factual durations per officer (no invented scores)
+9. EXECUTIVE_BODY national heatmap showing all active issues
 
 These are more important than visual polish.
 
