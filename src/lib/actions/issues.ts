@@ -4,7 +4,8 @@ import { z } from "zod";
 import { authActionClient, roleActionClient } from "@/lib/safe-action";
 import {
   updateIssueStatusSchema,
-  assignIssueSchema,
+  requestAssignmentSchema,
+  respondAssignmentSchema,
   verifyIssueSchema,
   createRootIssueSchema,
 } from "@/lib/validations/issue";
@@ -23,8 +24,9 @@ const ALLOWED_TRANSITIONS: Partial<Record<IssueStatus, IssueStatus[]>> = {
   REOPENED: [IssueStatus.IN_PROGRESS],
 };
 
-// Weighted community verification (STORY-012).
+// Weighted community verification.
 const VERIFY_THRESHOLD = 3.0; // weighted confirmations needed to VERIFY
+const REOPEN_THRESHOLD = 3.0; // weighted "still broken" votes needed to REOPEN (STORY-018)
 const PROOF_RADIUS_METERS = 200; // geotagged proof must be this close to the issue
 const PROOF_MULTIPLIER = 1.5;
 
@@ -46,6 +48,14 @@ export const verifyIssueAction = authActionClient
         longitude: true,
       },
     });
+
+    // Which round are we voting in? Resolution votes (RESOLVED/REOPENED) are kept
+    // separate from existence votes so the "is it fixed?" tally is never polluted
+    // by the original "yes this is real" confirmations (STORY-018).
+    const phase =
+      issue.status === IssueStatus.RESOLVED || issue.status === IssueStatus.REOPENED
+        ? "RESOLUTION"
+        : "EXISTENCE";
 
     // Locality gate: you can only verify issues in your own municipality.
     if (
@@ -75,9 +85,11 @@ export const verifyIssueAction = authActionClient
 
     const weight = base * (proofVerified ? PROOF_MULTIPLIER : 1);
 
-    // Upsert verification (one per user per issue)
+    // Upsert verification (one per user per issue per phase)
     const verification = await prisma.issueVerification.upsert({
-      where: { issueId_userId: { issueId: parsedInput.issueId, userId: String(ctx.user.id) } },
+      where: {
+        issueId_userId_phase: { issueId: parsedInput.issueId, userId: String(ctx.user.id), phase },
+      },
       create: {
         issueId: parsedInput.issueId,
         userId: String(ctx.user.id),
@@ -85,18 +97,21 @@ export const verifyIssueAction = authActionClient
         weight,
         isLocal,
         proofImages: parsedInput.proofImages,
+        comment: parsedInput.comment ?? null,
+        phase,
       },
       update: {
         type: parsedInput.type,
         weight,
         isLocal,
         proofImages: parsedInput.proofImages,
+        comment: parsedInput.comment ?? null,
       },
     });
 
-    // Recompute raw counts (display) and weighted sums (threshold logic).
+    // Recompute raw counts (display) and weighted sums (threshold logic) for THIS phase.
     const all = await prisma.issueVerification.findMany({
-      where: { issueId: parsedInput.issueId },
+      where: { issueId: parsedInput.issueId, phase },
       select: { type: true, weight: true },
     });
     let confirmCount = 0;
@@ -113,34 +128,54 @@ export const verifyIssueAction = authActionClient
       }
     }
 
+    if (phase === "EXISTENCE") {
+      // Existence round: enough weighted confirmations verify the issue is real.
+      let newStatus = issue.status;
+      if (
+        issue.status === IssueStatus.SUBMITTED &&
+        confirmWeight - disputeWeight >= VERIFY_THRESHOLD
+      ) {
+        newStatus = IssueStatus.VERIFIED;
+      }
+      await prisma.issue.update({
+        where: { id: parsedInput.issueId },
+        data: {
+          confirmCount,
+          disputeCount,
+          status: newStatus,
+          ...(newStatus === IssueStatus.VERIFIED && issue.status === IssueStatus.SUBMITTED
+            ? { verifiedAt: new Date() }
+            : {}),
+        },
+      });
+      return { confirmCount, disputeCount, newStatus, proofVerified, verification };
+    }
+
+    // Resolution round: enough weighted "still broken" votes reopen the issue.
+    // Existence counts on the issue are left untouched.
     let newStatus = issue.status;
-
-    // Auto-verify on weighted confirmations (not raw count).
     if (
-      issue.status === IssueStatus.SUBMITTED &&
-      confirmWeight - disputeWeight >= VERIFY_THRESHOLD
+      issue.status === IssueStatus.RESOLVED &&
+      disputeWeight - confirmWeight >= REOPEN_THRESHOLD
     ) {
-      newStatus = IssueStatus.VERIFIED;
-    }
-
-    // Auto-reopen if weighted disputes exceed confirmations on a RESOLVED issue.
-    if (issue.status === IssueStatus.RESOLVED && disputeWeight > confirmWeight) {
       newStatus = IssueStatus.REOPENED;
+      await prisma.$transaction([
+        prisma.issue.update({
+          where: { id: parsedInput.issueId },
+          data: { status: IssueStatus.REOPENED, resolvedAt: null, updatedAt: new Date() },
+        }),
+        prisma.issueUpdate.create({
+          data: {
+            issueId: parsedInput.issueId,
+            authorId: String(ctx.user.id),
+            content: "Reopened — the community reports this issue is not resolved.",
+            images: [],
+            statusChange: IssueStatus.REOPENED,
+          },
+        }),
+      ]);
     }
-
-    await prisma.issue.update({
-      where: { id: parsedInput.issueId },
-      data: {
-        confirmCount,
-        disputeCount,
-        status: newStatus,
-        ...(newStatus === IssueStatus.VERIFIED && issue.status === IssueStatus.SUBMITTED
-          ? { verifiedAt: new Date() }
-          : {}),
-      },
-    });
-
-    return { verification, confirmCount, disputeCount, newStatus, proofVerified };
+    return { confirmCount, disputeCount, newStatus, proofVerified, verification };
   });
 
 export const updateIssueStatusAction = roleActionClient([
@@ -180,16 +215,24 @@ export const updateIssueStatusAction = roleActionClient([
           statusChange: parsedInput.status,
         },
       }),
+      // Each resolution starts a fresh community review round (STORY-018).
+      ...(parsedInput.status === IssueStatus.RESOLVED
+        ? [
+            prisma.issueVerification.deleteMany({
+              where: { issueId: parsedInput.issueId, phase: "RESOLUTION" },
+            }),
+          ]
+        : []),
     ]);
 
     return { issue: updated };
   });
 
-export const assignIssueAction = roleActionClient([
+export const requestAssignmentAction = roleActionClient([
   Role.LOCAL_BODY_HEAD,
   Role.LOCAL_BODY_EMPLOYEE,
 ])
-  .schema(assignIssueSchema)
+  .schema(requestAssignmentSchema)
   .action(async ({ parsedInput, ctx }) => {
     const actor = await prisma.user.findUniqueOrThrow({
       where: { id: String(ctx.user.id) },
@@ -206,18 +249,16 @@ export const assignIssueAction = roleActionClient([
     });
 
     if (issue.status !== IssueStatus.VERIFIED) {
-      throw new Error("Issue must be VERIFIED before it can be assigned");
+      throw new Error("Issue must be VERIFIED before an officer can be requested.");
     }
-    if (
-      actor.municipalityName &&
-      issue.municipalityName !== actor.municipalityName
-    ) {
+    if (actor.municipalityName && issue.municipalityName !== actor.municipalityName) {
       throw new Error("That issue is not in your municipality.");
     }
 
-    const assignee = await prisma.user.findUnique({
-      where: { id: parsedInput.assignedToId },
+    const officer = await prisma.user.findUnique({
+      where: { id: parsedInput.officerId },
       select: {
+        name: true,
         role: true,
         municipalityName: true,
         department: true,
@@ -225,24 +266,23 @@ export const assignIssueAction = roleActionClient([
       },
     });
     if (
-      !assignee ||
-      assignee.role !== Role.LOCAL_BODY_EMPLOYEE ||
-      !assignee.isActive ||
-      assignee.municipalityName !== issue.municipalityName
+      !officer ||
+      officer.role !== Role.LOCAL_BODY_EMPLOYEE ||
+      !officer.isActive ||
+      officer.municipalityName !== issue.municipalityName
     ) {
       throw new Error("Pick an active officer in this municipality.");
     }
 
-    // Section heads may only assign issues that belong to their own section, and
-    // only to officers within that section. The municipal HEAD can override and
-    // assign any issue to anyone in the municipality.
+    // Section heads may only request for issues in their own section, and only
+    // officers within that section. The municipal HEAD may override.
     if (actor.role === Role.LOCAL_BODY_EMPLOYEE) {
       const issueSection = categoryToDepartment(issue.category);
       if (!actor.isSectionHead || actor.department !== issueSection) {
-        throw new Error("You can only assign issues for your own section.");
+        throw new Error("You can only request officers for your own section.");
       }
-      if (assignee.department !== actor.department) {
-        throw new Error("Assign to an officer in your section.");
+      if (officer.department !== actor.department) {
+        throw new Error("Request an officer in your section.");
       }
     }
 
@@ -250,23 +290,130 @@ export const assignIssueAction = roleActionClient([
       prisma.issue.update({
         where: { id: parsedInput.issueId },
         data: {
-          status: IssueStatus.ASSIGNED,
-          assignedToId: parsedInput.assignedToId,
-          assignedAt: new Date(),
-          dueDate: parsedInput.dueDate ? new Date(parsedInput.dueDate) : undefined,
+          requestedToId: parsedInput.officerId,
+          requestedById: String(ctx.user.id),
+          requestedAt: new Date(),
         },
       }),
       prisma.issueUpdate.create({
         data: {
           issueId: parsedInput.issueId,
           authorId: String(ctx.user.id),
-          content: parsedInput.comment ?? "Issue assigned",
+          content:
+            parsedInput.note ??
+            `Requested ${officer.name} to take this issue.`,
           images: [],
-          statusChange: IssueStatus.ASSIGNED,
         },
       }),
     ]);
 
+    return { issue: updated };
+  });
+
+// the requested officer accepts (committing a future completion date)
+// or declines. Only the requested officer may respond.
+export const respondToAssignmentAction = roleActionClient([Role.LOCAL_BODY_EMPLOYEE])
+  .schema(respondAssignmentSchema)
+  .action(async ({ parsedInput, ctx }) => {
+    const issue = await prisma.issue.findUniqueOrThrow({
+      where: { id: parsedInput.issueId },
+      select: { status: true, requestedToId: true },
+    });
+
+    if (issue.requestedToId !== String(ctx.user.id)) {
+      throw new Error("This request isn't addressed to you.");
+    }
+    if (issue.status !== IssueStatus.VERIFIED) {
+      throw new Error("This request is no longer open.");
+    }
+
+    if (parsedInput.decision === "ACCEPT") {
+      const due = new Date(parsedInput.completionDate!);
+      if (Number.isNaN(due.getTime()) || due.getTime() <= Date.now()) {
+        throw new Error("Choose a completion date in the future.");
+      }
+
+      const [updated] = await prisma.$transaction([
+        prisma.issue.update({
+          where: { id: parsedInput.issueId },
+          data: {
+            status: IssueStatus.ASSIGNED,
+            assignedToId: String(ctx.user.id),
+            assignedAt: new Date(),
+            dueDate: due,
+            requestedToId: null,
+            requestedById: null,
+            requestedAt: null,
+          },
+        }),
+        prisma.issueUpdate.create({
+          data: {
+            issueId: parsedInput.issueId,
+            authorId: String(ctx.user.id),
+            content: `Accepted — completing by ${due.toLocaleDateString(undefined, {
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+            })}.`,
+            images: [],
+            statusChange: IssueStatus.ASSIGNED,
+          },
+        }),
+      ]);
+      return { issue: updated, decision: "ACCEPT" as const };
+    }
+
+    // DECLINE — clear the request so the section head can re-request. Status
+    // stays VERIFIED.
+    const [updated] = await prisma.$transaction([
+      prisma.issue.update({
+        where: { id: parsedInput.issueId },
+        data: { requestedToId: null, requestedById: null, requestedAt: null },
+      }),
+      prisma.issueUpdate.create({
+        data: {
+          issueId: parsedInput.issueId,
+          authorId: String(ctx.user.id),
+          content: parsedInput.note
+            ? `Declined the assignment request: ${parsedInput.note}`
+            : "Declined the assignment request.",
+          images: [],
+        },
+      }),
+    ]);
+    return { issue: updated, decision: "DECLINE" as const };
+  });
+
+// STORY-017: the requester (section head / HEAD) cancels a pending request.
+export const cancelAssignmentRequestAction = roleActionClient([
+  Role.LOCAL_BODY_HEAD,
+  Role.LOCAL_BODY_EMPLOYEE,
+])
+  .schema(z.object({ issueId: z.string().cuid() }))
+  .action(async ({ parsedInput, ctx }) => {
+    const actor = await prisma.user.findUniqueOrThrow({
+      where: { id: String(ctx.user.id) },
+      select: { role: true, municipalityName: true, department: true, isSectionHead: true },
+    });
+    const issue = await prisma.issue.findUniqueOrThrow({
+      where: { id: parsedInput.issueId },
+      select: { municipalityName: true, category: true, requestedToId: true },
+    });
+    if (actor.municipalityName && issue.municipalityName !== actor.municipalityName) {
+      throw new Error("That issue is not in your municipality.");
+    }
+    if (
+      actor.role === Role.LOCAL_BODY_EMPLOYEE &&
+      (!actor.isSectionHead || actor.department !== categoryToDepartment(issue.category))
+    ) {
+      throw new Error("You can only manage requests for your own section.");
+    }
+    if (!issue.requestedToId) return { issue: null };
+
+    const updated = await prisma.issue.update({
+      where: { id: parsedInput.issueId },
+      data: { requestedToId: null, requestedById: null, requestedAt: null },
+    });
     return { issue: updated };
   });
 
@@ -299,16 +446,6 @@ export const createRootIssueAction = roleActionClient([Role.LOCAL_BODY_HEAD])
     });
 
     return { rootIssue };
-  });
-
-export const setIssueDueDateAction = roleActionClient([Role.LOCAL_BODY_HEAD])
-  .schema(z.object({ issueId: z.string(), dueDate: z.string() }))
-  .action(async ({ parsedInput }) => {
-    const issue = await prisma.issue.update({
-      where: { id: parsedInput.issueId },
-      data: { dueDate: new Date(parsedInput.dueDate) },
-    });
-    return { issue };
   });
 
 // STORY-010: HEAD confirms a coordinated fix — resolve open downstream issues

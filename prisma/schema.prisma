@@ -105,6 +105,7 @@ model User {
   issueVerifications IssueVerification[]
   issueUpdates       IssueUpdate[]
   assignedIssues     Issue[]             @relation("AssignedOfficer")
+  requestedIssues    Issue[]             @relation("RequestedOfficer")
 
   @@map("user")
 }
@@ -212,6 +213,14 @@ model Issue {
   assignedToId  String?
   assignedTo    User?        @relation("AssignedOfficer", fields: [assignedToId], references: [id])
 
+  // Assignment request handshake (STORY-017). A section head (or HEAD override)
+  // REQUESTS an officer; the officer ACCEPTS (committing a completion date) or
+  // DECLINES. While a request is pending the issue stays VERIFIED.
+  requestedToId String?
+  requestedTo   User?        @relation("RequestedOfficer", fields: [requestedToId], references: [id])
+  requestedById String?
+  requestedAt   DateTime?
+
   rootIssueId              String?
   rootIssue                RootIssue? @relation(fields: [rootIssueId], references: [id])
 
@@ -256,9 +265,18 @@ model IssueVerification {
   isLocal     Boolean  @default(false) // verifier was in the issue's ward
   proofImages String[]                 // geotagged proof photo URLs (may be empty)
 
+  // Verification phase (STORY-018): EXISTENCE = "this issue is real" (SUBMITTED→VERIFIED),
+  // RESOLUTION = "is the fix real?" (RESOLVED→REOPENED). Kept separate so the resolution
+  // tally is never polluted by existence-phase confirmations.
+  phase     String           @default("EXISTENCE")
+
+  // Optional public reason (STORY-018b) — makes a confirm/dispute transparent: the
+  // community can see WHY someone says an issue is or isn't resolved.
+  comment   String?
+
   createdAt DateTime         @default(now())
 
-  @@unique([issueId, userId])
+  @@unique([issueId, userId, phase])
   @@map("issue_verification")
 }
 
