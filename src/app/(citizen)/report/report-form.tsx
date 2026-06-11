@@ -205,7 +205,9 @@ export function ReportForm({ defaults }: { defaults: Defaults }) {
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
             {attached
-              ? "Others have reported this too. Your report increased the issue's community impact."
+              ? result.outcome === "attached_semantic"
+                ? "The AI found this is likely the same issue nearby. Your report increased its community impact."
+                : "Others have reported this too. Your report increased the issue's community impact."
               : "Thanks for the report. It will be verified by your community before being assigned."}
           </p>
 
@@ -401,8 +403,7 @@ export function ReportForm({ defaults }: { defaults: Defaults }) {
           <DialogHeader>
             <DialogTitle>A similar issue exists nearby</DialogTitle>
             <DialogDescription>
-              We found an existing issue that looks related
-              {candidate ? ` (${Math.round(candidate.similarity * 100)}% similar)` : ""}.
+              We found an existing issue that looks related.
               Attach your report to it to raise its community impact, or submit separately.
             </DialogDescription>
           </DialogHeader>
