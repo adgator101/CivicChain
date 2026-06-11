@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CivicChain Nepal
 
-## Getting Started
+A civic accountability and governance intelligence platform that turns citizen reports into actionable, trackable, verifiable public issues — not another complaint inbox.
 
-First, run the development server:
+**Theme:** _Rebuilding Systems Designed for Yesterday — Building Solutions that Scale_
+
+Citizens report problems in their ward. Reports cluster into shared issues, the community verifies them, local-body staff resolve them with a visible timeline, and AI surfaces duplicate patterns, root causes, and cascading civic chains — always with a human in the loop.
+
+## Tech stack
+
+| Area   | Stack                                                            |
+| ------ | ---------------------------------------------------------------- |
+| App    | Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · shadcn/ui |
+| Data   | PostgreSQL · Prisma 7                                            |
+| Auth   | better-auth (RBAC: Citizen, Employee, Head, Executive)           |
+| Maps   | Mapbox GL JS                                                     |
+| AI     | Google Gemini (`gemini-3.1-flash-lite`)                          |
+| Deploy | Vercel                                                           |
+
+Full details, versions, and architectural constraints → **[docs/TECHSTACK.md](./docs/TECHSTACK.md)**
+
+## Documentation
+
+| Doc                                            | Description                                           |
+| ---------------------------------------------- | ----------------------------------------------------- |
+| [docs/BUSINESS.md](./docs/BUSINESS.md)         | Problem validation, business model, revenue streams   |
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | System architecture, layers, and end-to-end data flow |
+| [docs/DATABASE.md](./docs/DATABASE.md)         | Entity-relationship diagram and schema reference      |
+| [docs/TECHSTACK.md](./docs/TECHSTACK.md)       | Technology choices, dependencies, and MVP boundaries  |
+
+Product rules and feature specs for development live in [`.cursor/rules/civicchain.mdc`](./.cursor/rules/civicchain.mdc).
+
+## Getting started
+
+**Prerequisites:** Node.js 20+, PostgreSQL, and environment variables (see `.env.example` if present).
 
 ```bash
+npm install
+npx prisma migrate dev
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+You will need API keys for Mapbox (`NEXT_PUBLIC_MAPBOX_TOKEN`) and Google Gemini (`GEMINI_API_KEY`) for maps and AI features.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Scripts
 
-## Learn More
+| Command         | Purpose                  |
+| --------------- | ------------------------ |
+| `npm run dev`   | Start development server |
+| `npm run build` | Production build         |
+| `npm run start` | Start production server  |
+| `npm run lint`  | Run ESLint               |
 
-To learn more about Next.js, take a look at the following resources:
+## Deploy
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The app targets [Vercel](https://vercel.com/) with Prisma Postgres. See [Next.js deployment docs](https://nextjs.org/docs/app/building-your-application/deploying) for the standard flow.
