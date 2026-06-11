@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, MapPin, Layers } from "lucide-react";
+import { ArrowLeft, MapPin, Layers, GitBranch } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { Role } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { formatRelativeTime } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { IssueStatusBadge } from "@/components/civic/issue-status-badge";
 import { PriorityBadge } from "@/components/civic/priority-badge";
@@ -41,6 +42,12 @@ export default async function CitizenIssueDetailPage({
         orderBy: { createdAt: "asc" },
       },
       rootIssue: { select: { id: true, title: true } },
+      downstreamLinks: {
+        select: {
+          upstreamIssue: { select: { id: true, title: true, createdAt: true } },
+        },
+        take: 1,
+      },
     },
   });
 
@@ -55,6 +62,7 @@ export default async function CitizenIssueDetailPage({
     )?.type ?? null;
 
   const photos = issue.reports.flatMap((r) => r.images);
+  const upstream = issue.downstreamLinks[0]?.upstreamIssue ?? null;
   const locationParts = [
     issue.wardNumber ? `Ward ${issue.wardNumber}` : null,
     issue.municipalityName,
@@ -126,6 +134,25 @@ export default async function CitizenIssueDetailPage({
             myVerification={myVerification}
             issueStatus={issue.status}
           />
+        </Card>
+      )}
+
+      {/* Upstream cause banner */}
+      {upstream && (
+        <Card className="flex items-center gap-2 border-l-4 border-amber-500 p-4 text-sm">
+          <GitBranch className="size-4 shrink-0 text-amber-600" />
+          <span>
+            This may be caused by:{" "}
+            <Link
+              href={`/issues/${upstream.id}`}
+              className="font-medium underline underline-offset-4"
+            >
+              {upstream.title}
+            </Link>{" "}
+            <span className="text-muted-foreground">
+              (reported {formatRelativeTime(new Date(upstream.createdAt))})
+            </span>
+          </span>
         </Card>
       )}
 

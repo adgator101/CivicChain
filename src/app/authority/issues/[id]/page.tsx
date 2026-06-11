@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, MapPin, Layers, UserCheck, FileText } from "lucide-react";
+import { ArrowLeft, MapPin, Layers, UserCheck, FileText, GitBranch } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { Role, IssueStatus } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formatRelativeTime } from "@/lib/utils";
 import { categoryToDepartment } from "@/lib/departments";
+import { getDownstreamOpenIssues } from "@/lib/queries";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { IssueStatusBadge } from "@/components/civic/issue-status-badge";
@@ -17,6 +18,7 @@ import { IssueTimeline } from "@/components/civic/issue-timeline";
 import { AssignIssueDialog } from "@/components/civic/assign-issue-dialog";
 import { StatusUpdateForm } from "@/components/civic/status-update-form";
 import { DeadlineForm } from "@/components/civic/deadline-form";
+import { CascadeResolveCard } from "@/components/civic/cascade-resolve-card";
 
 const ALLOWED_NEXT: Partial<Record<IssueStatus, IssueStatus[]>> = {
   ASSIGNED: [IssueStatus.IN_PROGRESS],
@@ -60,6 +62,12 @@ export default async function AuthorityIssueDetailPage({
       },
       assignedTo: { select: { id: true, name: true } },
       rootIssue: { select: { id: true, title: true } },
+      downstreamLinks: {
+        select: {
+          upstreamIssue: { select: { id: true, title: true, createdAt: true } },
+        },
+        take: 1,
+      },
     },
   });
 
@@ -76,6 +84,11 @@ export default async function AuthorityIssueDetailPage({
     (isHead ||
       (!!me?.isSectionHead &&
         me.department === categoryToDepartment(issue.category)));
+  const upstream = issue.downstreamLinks[0]?.upstreamIssue ?? null;
+  const downstreamOpen =
+    issue.status === IssueStatus.RESOLVED
+      ? await getDownstreamOpenIssues(issue.id)
+      : [];
   const locationParts = [
     issue.wardNumber ? `Ward ${issue.wardNumber}` : null,
     issue.municipalityName,
@@ -84,7 +97,7 @@ export default async function AuthorityIssueDetailPage({
   ].filter(Boolean);
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-3xl px-4 py-6 space-y-6">
       <Link
         href="/authority/dashboard"
         className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
@@ -130,6 +143,30 @@ export default async function AuthorityIssueDetailPage({
           longitude={issue.longitude}
           address={issue.address}
         />
+      )}
+
+      {/* Upstream cause banner */}
+      {upstream && (
+        <Card className="flex items-center gap-2 border-l-4 border-amber-500 p-4 text-sm">
+          <GitBranch className="size-4 shrink-0 text-amber-600" />
+          <span>
+            May be caused by:{" "}
+            <Link
+              href={`/authority/issues/${upstream.id}`}
+              className="font-medium underline underline-offset-4"
+            >
+              {upstream.title}
+            </Link>{" "}
+            <span className="text-muted-foreground">
+              (reported {formatRelativeTime(new Date(upstream.createdAt))})
+            </span>
+          </span>
+        </Card>
+      )}
+
+      {/* Cascade resolve — RESOLVED upstream with open downstream */}
+      {downstreamOpen.length > 0 && (
+        <CascadeResolveCard upstreamIssueId={issue.id} downstream={downstreamOpen} />
       )}
 
       {/* Root issue banner */}
