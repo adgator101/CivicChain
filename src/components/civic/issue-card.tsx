@@ -31,50 +31,58 @@ export function IssueCard({
   issue: IssueCardData;
   href: string;
 }) {
+  return (
+    <Link href={href} className="block">
+      <IssueCardBody issue={issue} />
+    </Link>
+  );
+}
+
+// The card visuals without any navigation wrapper — so it can be embedded in a
+// Link (citizen pages) or a selection button (authority map panel).
+export function IssueCardBody({ issue }: { issue: IssueCardData }) {
   const { flagged } = needsAttention(issue.status, issue.updatedAt);
 
   return (
-    <Link href={href} className="block">
-      <Card
-        className={cn(
-          "p-4 transition-colors hover:bg-muted/40",
-          flagged && "border-l-2 border-l-simrik"
-        )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 space-y-1">
-            <p className="truncate font-medium leading-snug">{issue.title}</p>
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              <MapPin className="size-3" />
-              {issue.municipalityName ?? "Unknown"}
-              {issue.wardNumber ? ` · Ward ${issue.wardNumber}` : ""} ·{" "}
-              {categoryLabel(issue.category)}
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
-            <IssueStatusBadge status={issue.status} />
-            <AttentionBadge
-              status={issue.status}
-              updatedAt={issue.updatedAt}
-              dueDate={issue.dueDate}
-            />
-          </div>
+    <Card
+      className={cn(
+        "p-4 transition-colors hover:bg-muted/40",
+        flagged && "border-l-2 border-l-simrik"
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <p className="truncate font-medium leading-snug">{issue.title}</p>
+          <p className="flex items-center gap-1 text-xs text-muted-foreground">
+            <MapPin className="size-3" />
+            {issue.municipalityName ?? "Unknown"}
+            {issue.wardNumber ? ` · Ward ${issue.wardNumber}` : ""} ·{" "}
+            {categoryLabel(issue.category)}
+          </p>
         </div>
-
-        <div className="mt-3">
-          <CommunityImpactMeter
-            score={issue.communityImpactScore}
-            affectedCitizenCount={issue.affectedCitizenCount}
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <IssueStatusBadge status={issue.status} />
+          <AttentionBadge
+            status={issue.status}
+            updatedAt={issue.updatedAt}
+            dueDate={issue.dueDate}
           />
         </div>
+      </div>
 
-        <div className="mt-3 flex items-center justify-between">
-          <PriorityBadge priority={issue.priority} />
-          <span className="text-xs text-muted-foreground">
-            {formatRelativeTime(new Date(issue.createdAt))}
-          </span>
-        </div>
-      </Card>
-    </Link>
+      <div className="mt-3">
+        <CommunityImpactMeter
+          score={issue.communityImpactScore}
+          affectedCitizenCount={issue.affectedCitizenCount}
+        />
+      </div>
+
+      <div className="mt-3 flex items-center justify-between">
+        <PriorityBadge priority={issue.priority} />
+        <span className="text-xs text-muted-foreground">
+          {formatRelativeTime(new Date(issue.createdAt))}
+        </span>
+      </div>
+    </Card>
   );
 }

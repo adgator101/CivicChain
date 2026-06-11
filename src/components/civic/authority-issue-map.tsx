@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
-import Link from "next/link";
+import { useMemo, useRef, useState, useCallback, createContext, useContext, type ReactNode } from "react";
 import Map, {
   Source,
   Layer,
@@ -13,21 +12,23 @@ import Map, {
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { ExpressionSpecification } from "mapbox-gl";
 import type { FeatureCollection, Point } from "geojson";
-import { MapPin, X, ArrowRight, Building2 } from "lucide-react";
+import { MapPin, Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { IssueStatusBadge } from "./issue-status-badge";
-import { PriorityBadge } from "./priority-badge";
-import { AttentionBadge } from "./attention-badge";
-import { CommunityImpactMeter } from "./community-impact-meter";
-import { AssignIssueDialog } from "./assign-issue-dialog";
+import { AuthorityIssueDetailPanel } from "./authority-issue-detail-panel";
 import { categoryLabel, statusLabel } from "@/lib/utils";
 import { PRIORITY_COLORS, PRIORITY_ORDER } from "@/lib/issue-colors";
-import type { Category, IssueStatus, Priority } from "@/generated/prisma/client";
+import type { Category, Department, IssueStatus, Priority } from "@/generated/prisma/client";
 import { MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_URL } from "@/lib/mapbox";
 
 const NEPAL_CENTER = { latitude: 28.3949, longitude: 84.124, zoom: 6 };
 const LAYER_ID = "authority-issue-pennants";
+
+// Lets cards rendered inside the left panel (passed as `children`) open the
+// floating right-side detail panel instead of navigating to the full page.
+const SelectIssueContext = createContext<((id: string) => void) | null>(null);
+export function useSelectIssue() {
+  return useContext(SelectIssueContext);
+}
 
 export type AuthorityMapIssue = {
   id: string;
@@ -141,6 +142,7 @@ const pennantLayer: LayerProps = {
 export function AuthorityIssueMap({
   issues,
   isHead,
+  sectionDept = null,
   headerTitle,
   headerSubtitle,
   stats,
@@ -148,6 +150,7 @@ export function AuthorityIssueMap({
 }: {
   issues: AuthorityMapIssue[];
   isHead: boolean;
+  sectionDept?: Department | null;
   headerTitle: string;
   headerSubtitle: string;
   stats: MapStat[];
@@ -177,10 +180,16 @@ export function AuthorityIssueMap({
 
   const selected = selectedId ? valid.find((i) => i.id === selectedId) ?? null : null;
 
-  function selectAndFly(issue: AuthorityMapIssue) {
-    setSelectedId(issue.id);
-    mapRef.current?.flyTo({ center: [issue.longitude, issue.latitude], zoom: 15, duration: 800 });
-  }
+  const selectIssue = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      const issue = valid.find((i) => i.id === id);
+      if (issue) {
+        mapRef.current?.flyTo({ center: [issue.longitude, issue.latitude], zoom: 15, duration: 800 });
+      }
+    },
+    [valid]
+  );
 
   const geojson: FeatureCollection<Point> = {
     type: "FeatureCollection",
@@ -192,6 +201,7 @@ export function AuthorityIssueMap({
   };
 
   return (
+    <SelectIssueContext.Provider value={selectIssue}>
     <div className="relative h-[calc(100vh-3.5rem)] w-full overflow-hidden">
       {/* Map canvas (or fallback) */}
       {MAPBOX_ACCESS_TOKEN ? (
@@ -313,7 +323,7 @@ export function AuthorityIssueMap({
                 {filtered.map((i) => (
                   <li key={i.id}>
                     <button
-                      onClick={() => selectAndFly(i)}
+                      onClick={() => selectIssue(i.id)}
                       className={cn(
                         "flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted/60",
                         selectedId === i.id && "bg-accent"
@@ -352,43 +362,17 @@ export function AuthorityIssueMap({
         ))}
       </div>
 
-      {/* Selected issue detail (bottom-right) */}
-      {selected && (
-        <div className="absolute inset-x-3 bottom-3 z-40 sm:inset-x-auto sm:right-3 sm:w-80">
-          <div className="space-y-3 rounded-xl border border-nilo/15 bg-background/95 p-4 shadow-lg backdrop-blur">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <IssueStatusBadge status={selected.status} />
-                <PriorityBadge priority={selected.priority} />
-              </div>
-              <button onClick={() => setSelectedId(null)} className="text-muted-foreground transition-colors hover:text-foreground" aria-label="Close">
-                <X className="size-4" />
-              </button>
-            </div>
-            <div className="space-y-1">
-              <p className="font-heading text-base font-semibold leading-snug">{selected.title}</p>
-              <p className="text-xs text-muted-foreground">
-                {selected.wardNumber ? `Ward ${selected.wardNumber} · ` : ""}
-                {categoryLabel(selected.category)}
-              </p>
-            </div>
-            <CommunityImpactMeter
-              score={selected.communityImpactScore}
-              affectedCitizenCount={selected.affectedCitizenCount}
-            />
-            <AttentionBadge status={selected.status} updatedAt={selected.updatedAt} dueDate={selected.dueDate} />
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="outline" render={<Link href={`/authority/issues/${selected.id}`} />}>
-                Open issue
-                <ArrowRight className="size-4" />
-              </Button>
-              {isHead && selected.status === "VERIFIED" && (
-                <AssignIssueDialog issueId={selected.id} issueTitle={selected.title} issueCategory={selected.category} />
-              )}
-            </div>
-          </div>
-        </div>
+      {/* Selected issue detail — floating right-side panel (in place, no navigation) */}
+      {selectedId && (
+        <AuthorityIssueDetailPanel
+          issueId={selectedId}
+          revision={selected ? String(selected.updatedAt) : selectedId}
+          isHead={isHead}
+          sectionDept={sectionDept}
+          onClose={() => setSelectedId(null)}
+        />
       )}
     </div>
+    </SelectIssueContext.Provider>
   );
 }
