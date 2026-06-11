@@ -1,18 +1,19 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, MapPin, Layers, GitBranch } from "lucide-react";
+import { ArrowLeft, MapPin, Layers, Users } from "lucide-react";
 import { requireRole } from "@/lib/session";
 import { Role } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
-import { formatRelativeTime } from "@/lib/utils";
+import { categoryLabel, needsAttention } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { IssueStatusBadge } from "@/components/civic/issue-status-badge";
 import { PriorityBadge } from "@/components/civic/priority-badge";
-import { CommunityImpactMeter } from "@/components/civic/community-impact-meter";
-import { AttentionBadge } from "@/components/civic/attention-badge";
 import { IssueLocationMap } from "@/components/civic/issue-location-map";
 import { IssueTimeline } from "@/components/civic/issue-timeline";
 import { VerifyIssueButtons } from "@/components/civic/verify-issue-buttons";
+import { ReportTracker } from "@/components/civic/report-tracker";
+import { OfficerContactCard } from "@/components/civic/officer-contact-card";
+import { CascadeLinkBanner } from "@/components/civic/cascade-link-banner";
 
 const VERIFIABLE_STATUSES = new Set(["SUBMITTED", "VERIFIED", "RESOLVED"]);
 
@@ -42,9 +43,15 @@ export default async function CitizenIssueDetailPage({
         orderBy: { createdAt: "asc" },
       },
       rootIssue: { select: { id: true, title: true } },
+      assignedTo: {
+        select: { name: true, phone: true, department: true, wardNumber: true },
+      },
       downstreamLinks: {
         select: {
-          upstreamIssue: { select: { id: true, title: true, createdAt: true } },
+          reason: true,
+          source: true,
+          confidence: true,
+          upstreamIssue: { select: { id: true, title: true } },
         },
         take: 1,
       },
@@ -61,14 +68,27 @@ export default async function CitizenIssueDetailPage({
       })
     )?.type ?? null;
 
+  const verifications = await prisma.issueVerification.findMany({
+    where: { issueId: id },
+    select: { type: true, isLocal: true, proofImages: true },
+  });
+  const confirms = verifications.filter((v) => v.type === "CONFIRM");
+  const nearbyConfirms = confirms.filter((v) => v.isLocal).length;
+  const photoConfirms = confirms.filter((v) => v.proofImages.length > 0).length;
+
+  const inProgressAt =
+    [...issue.updates].reverse().find((u) => u.statusChange === "IN_PROGRESS")?.createdAt ?? null;
+
   const photos = issue.reports.flatMap((r) => r.images);
-  const upstream = issue.downstreamLinks[0]?.upstreamIssue ?? null;
-  const locationParts = [
+  const cascadeLink = issue.downstreamLinks[0] ?? null;
+  const attention = needsAttention(issue.status, issue.updatedAt);
+
+  const place = [
+    issue.address,
     issue.wardNumber ? `Ward ${issue.wardNumber}` : null,
     issue.municipalityName,
     issue.districtName,
-    issue.provinceName,
-  ].filter(Boolean);
+  ].filter(Boolean).join(" · ") || "Location not specified";
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6">
@@ -80,114 +100,150 @@ export default async function CitizenIssueDetailPage({
         Back to dashboard
       </Link>
 
-      {/* Title + status */}
-      <div className="space-y-2 border-l-2 border-simrik pl-4">
-        <div className="flex flex-wrap items-center gap-2">
+      {/* ── Hero: nilo pennant band ─────────────────────────────────────────── */}
+      <header className="pennant-clip bg-nilo px-6 py-7 text-white sm:px-8">
+        <div className="flex items-center gap-2">
           <IssueStatusBadge status={issue.status} />
           <PriorityBadge priority={issue.priority} />
-          <AttentionBadge
-            status={issue.status}
-            updatedAt={issue.updatedAt}
-            dueDate={issue.dueDate}
-          />
-        </div>
-        <h1 className="text-3xl font-semibold tracking-tight">{issue.title}</h1>
-        {issue.description && (
-          <p className="text-sm text-foreground/90">{issue.description}</p>
-        )}
-        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <MapPin className="size-4 shrink-0" />
-          {[issue.address, ...locationParts].filter(Boolean).join(" · ") ||
-            "Location not specified"}
-        </p>
-      </div>
-
-      {/* Map */}
-      {issue.latitude != null && issue.longitude != null && (
-        <IssueLocationMap
-          latitude={issue.latitude}
-          longitude={issue.longitude}
-          address={issue.address}
-        />
-      )}
-
-      {/* Community impact */}
-      <Card className="p-4">
-        <CommunityImpactMeter
-          score={issue.communityImpactScore}
-          affectedCitizenCount={issue.affectedCitizenCount}
-        />
-      </Card>
-
-      {/* Verification */}
-      {VERIFIABLE_STATUSES.has(issue.status) && (
-        <Card className="space-y-3 p-4">
-          <h2 className="text-sm font-semibold">
-            {issue.status === "RESOLVED"
-              ? "Resolution verification"
-              : "Community verification"}
-          </h2>
-          <VerifyIssueButtons
-            issueId={issue.id}
-            initialConfirmCount={issue.confirmCount}
-            initialDisputeCount={issue.disputeCount}
-            myVerification={myVerification}
-            issueStatus={issue.status}
-          />
-        </Card>
-      )}
-
-      {/* Upstream cause banner */}
-      {upstream && (
-        <Card className="flex items-center gap-2 border-l-4 border-amber-500 p-4 text-sm">
-          <GitBranch className="size-4 shrink-0 text-amber-600" />
-          <span>
-            This may be caused by:{" "}
-            <Link
-              href={`/issues/${upstream.id}`}
-              className="font-medium underline underline-offset-4"
-            >
-              {upstream.title}
-            </Link>{" "}
-            <span className="text-muted-foreground">
-              (reported {formatRelativeTime(new Date(upstream.createdAt))})
-            </span>
+          <span className="ml-auto select-all font-mono text-xs text-white/50">
+            #{id.slice(-8).toUpperCase()}
           </span>
-        </Card>
+        </div>
+
+        <h1 className="mt-3 font-heading text-3xl font-semibold leading-tight tracking-tight">
+          {issue.title}
+        </h1>
+
+        <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-white/70">
+          <span className="inline-flex items-center gap-1.5">
+            <MapPin className="size-4 shrink-0" />
+            {place}
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <Users className="size-4 shrink-0" />
+            {issue.affectedCitizenCount} {issue.affectedCitizenCount === 1 ? "citizen" : "citizens"} affected
+          </span>
+          <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs">
+            {categoryLabel(issue.category)}
+          </span>
+          {attention.flagged && (
+            <span className="rounded-full bg-amber-400/20 px-2.5 py-0.5 text-xs text-amber-200">
+              {attention.reason} {attention.daysInStatus}d
+            </span>
+          )}
+        </div>
+      </header>
+
+      {/* ── Description ─────────────────────────────────────────────────────── */}
+      {issue.description && (
+        <p className="text-[15px] leading-relaxed text-foreground/80">{issue.description}</p>
       )}
 
-      {/* Root issue banner */}
+      {/* ── Context banners (soft tints, no border bars) ────────────────────── */}
+      {cascadeLink && (
+        <CascadeLinkBanner
+          upstream={cascadeLink.upstreamIssue}
+          reason={cascadeLink.reason}
+          source={cascadeLink.source}
+          confidence={cascadeLink.confidence}
+          downstreamIssueId={issue.id}
+          canRemove={false}
+          hrefBase="/issues"
+        />
+      )}
       {issue.rootIssue && (
-        <Card className="flex items-center gap-2 border-l-4 border-nilo p-4 text-sm">
+        <div className="flex items-center gap-2 rounded-xl bg-nilo/[0.06] px-4 py-3 text-sm ring-1 ring-nilo/10">
           <Layers className="size-4 shrink-0 text-nilo" />
           <span>
-            Part of a larger root issue:{" "}
+            Part of a larger problem:{" "}
             <span className="font-medium">{issue.rootIssue.title}</span>
           </span>
-        </Card>
+        </div>
       )}
 
-      {/* Photos */}
+      {/* ── Progress (the spine) ────────────────────────────────────────────── */}
+      <section className="space-y-3">
+        <h2 className="text-base font-semibold tracking-tight">Progress</h2>
+        <Card className="p-5">
+          <ReportTracker
+            status={issue.status}
+            createdAt={issue.createdAt}
+            verifiedAt={issue.verifiedAt}
+            assignedAt={issue.assignedAt}
+            inProgressAt={inProgressAt}
+            resolvedAt={issue.resolvedAt}
+            dueDate={issue.dueDate}
+            officerName={issue.assignedTo?.name ?? null}
+          />
+        </Card>
+        {issue.assignedTo && (
+          <OfficerContactCard
+            name={issue.assignedTo.name}
+            department={issue.assignedTo.department}
+            wardNumber={issue.assignedTo.wardNumber}
+            phone={issue.assignedTo.phone}
+          />
+        )}
+      </section>
+
+      {/* ── Location map ────────────────────────────────────────────────────── */}
+      {issue.latitude != null && issue.longitude != null && (
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold tracking-tight">Location</h2>
+          <IssueLocationMap
+            latitude={issue.latitude}
+            longitude={issue.longitude}
+            address={issue.address}
+          />
+        </section>
+      )}
+
+      {/* ── Community verification ──────────────────────────────────────────── */}
+      {VERIFIABLE_STATUSES.has(issue.status) && (
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold tracking-tight">
+            {issue.status === "RESOLVED" ? "Was this resolved?" : "Can you confirm this issue?"}
+          </h2>
+          <Card className="space-y-3 p-5">
+            <VerifyIssueButtons
+              issueId={issue.id}
+              initialConfirmCount={issue.confirmCount}
+              initialDisputeCount={issue.disputeCount}
+              myVerification={myVerification}
+              issueStatus={issue.status}
+            />
+            {confirms.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {confirms.length} {confirms.length === 1 ? "resident has" : "residents have"} confirmed this
+                {nearbyConfirms > 0 ? ` · ${nearbyConfirms} from this ward` : ""}
+                {photoConfirms > 0 ? ` · ${photoConfirms} with photo proof` : ""}
+              </p>
+            )}
+          </Card>
+        </section>
+      )}
+
+      {/* ── Photos ──────────────────────────────────────────────────────────── */}
       {photos.length > 0 && (
         <section className="space-y-3">
-          <h2 className="text-lg font-semibold tracking-tight">Photos</h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+          <h2 className="text-base font-semibold tracking-tight">Photos</h2>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {photos.map((src) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={src}
                 src={src}
                 alt="Reported issue"
-                className="aspect-square w-full rounded-lg border object-cover"
+                className="aspect-square w-full rounded-xl border object-cover"
               />
             ))}
           </div>
         </section>
       )}
 
-      {/* Timeline */}
+      {/* ── Activity ────────────────────────────────────────────────────────── */}
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold tracking-tight">Timeline</h2>
+        <h2 className="text-base font-semibold tracking-tight">Activity</h2>
         <IssueTimeline updates={issue.updates} />
       </section>
     </div>
