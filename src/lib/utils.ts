@@ -25,7 +25,6 @@ export function haversineDistance(
 }
 
 // ─── Community Impact Score + priority auto-elevation ─────────────────────────
-// Thresholds (per civicchain.mdc): 1→0.3, 3→0.6, 8→0.88 (HIGH), 15+→0.98 (CRITICAL).
 // Priority auto-elevation here is PURE ARITHMETIC — the only allowed automatic
 // priority change. It never lowers an existing higher priority.
 export function computeImpact(reportCount: number): {

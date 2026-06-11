@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { requireRole } from "@/lib/session";
 import { Role, Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -12,7 +11,8 @@ import {
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Sparkles } from "lucide-react";
-import { IssueCard } from "@/components/civic/issue-card";
+import { IssueCardBody } from "@/components/civic/issue-card";
+import { SelectIssue } from "@/components/civic/select-issue";
 import { IssueStatusBadge } from "@/components/civic/issue-status-badge";
 import { PriorityBadge } from "@/components/civic/priority-badge";
 import { VerifyButton } from "@/components/civic/verify-button";
@@ -113,6 +113,7 @@ export default async function AuthorityDashboardPage() {
     <AuthorityIssueMap
       issues={allIssues}
       isHead={isHead}
+      sectionDept={sectionDept}
       headerTitle={headerTitle}
       headerSubtitle={headerSubtitle}
       stats={statChips}
@@ -134,7 +135,9 @@ export default async function AuthorityDashboardPage() {
             <div className="space-y-2">
               {sectionQueue.map((issue) => (
                 <div key={issue.id} className="space-y-2">
-                  <IssueCard issue={issue} href={`/authority/issues/${issue.id}`} />
+                  <SelectIssue issueId={issue.id}>
+                    <IssueCardBody issue={issue} />
+                  </SelectIssue>
                   <div className="flex justify-end">
                     <AssignIssueDialog
                       issueId={issue.id}
@@ -185,7 +188,7 @@ export default async function AuthorityDashboardPage() {
           </div>
           <div className="space-y-2">
             {chainAlerts.map((alert) => (
-              <Link key={alert.root.id} href={`/authority/issues/${alert.root.id}`} className="block">
+              <SelectIssue key={alert.root.id} issueId={alert.root.id}>
                 <Card className="border-l-4 border-amber-500 p-3 transition-colors hover:bg-muted/40">
                   <p className="text-sm font-medium">
                     {alert.root.wardNumber ? `Ward ${alert.root.wardNumber} · ` : ""}
@@ -195,7 +198,7 @@ export default async function AuthorityDashboardPage() {
                     Root: {alert.root.title} · fix once, clear the chain
                   </p>
                 </Card>
-              </Link>
+              </SelectIssue>
             ))}
           </div>
         </section>
@@ -211,7 +214,9 @@ export default async function AuthorityDashboardPage() {
           <div className="space-y-2">
             {submittedIssues.map((issue) => (
               <div key={issue.id} className="space-y-2">
-                <IssueCard issue={issue} href={`/authority/issues/${issue.id}`} />
+                <SelectIssue issueId={issue.id}>
+                  <IssueCardBody issue={issue} />
+                </SelectIssue>
                 <div className="flex justify-end">
                   <VerifyButton issueId={issue.id} />
                 </div>
@@ -235,7 +240,7 @@ export default async function AuthorityDashboardPage() {
                   ? "border-l-4 border-red-500"
                   : "border-l-4 border-amber-500";
               return (
-                <Link key={issue.id} href={`/authority/issues/${issue.id}`} className="block">
+                <SelectIssue key={issue.id} issueId={issue.id}>
                   <Card className={cn("p-3 transition-colors hover:bg-muted/40", borderClass)}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 space-y-1">
@@ -260,7 +265,7 @@ export default async function AuthorityDashboardPage() {
                       </div>
                     </div>
                   </Card>
-                </Link>
+                </SelectIssue>
               );
             })}
           </div>
