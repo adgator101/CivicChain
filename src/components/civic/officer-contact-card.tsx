@@ -1,4 +1,5 @@
-import { Phone, IdCard } from "lucide-react";
+import Link from "next/link";
+import { Phone, IdCard, ArrowUpRight } from "lucide-react";
 import { DEPARTMENT_LABELS } from "@/lib/departments";
 import type { Department } from "@/generated/prisma/client";
 
@@ -14,18 +15,33 @@ function initials(name: string) {
 }
 
 // Compact "ID card" for the officer handling an issue (STORY-013). The phone is
-// labelled an office contact — in production this is an official line.
+// labelled an office contact — in production this is an official line. The name
+// links to the officer's public recognition profile (STORY-019).
 export function OfficerContactCard({
+  officerId,
   name,
   department,
   wardNumber,
   phone,
 }: {
+  officerId?: string;
   name: string;
   department: Department | null;
   wardNumber: number | null;
   phone: string | null;
 }) {
+  const nameEl = officerId ? (
+    <Link
+      href={`/officers/${officerId}`}
+      className="inline-flex items-center gap-1 truncate font-medium leading-snug hover:underline"
+    >
+      {name}
+      <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground" />
+    </Link>
+  ) : (
+    <p className="truncate font-medium leading-snug">{name}</p>
+  );
+
   return (
     <div className="rounded-xl border bg-card p-4">
       <p className="mb-3 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -37,7 +53,7 @@ export function OfficerContactCard({
           {initials(name)}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate font-medium leading-snug">{name}</p>
+          {nameEl}
           <p className="truncate text-xs text-muted-foreground">
             {department ? DEPARTMENT_LABELS[department] : "Local body officer"}
             {wardNumber ? ` · Ward ${wardNumber}` : ""}

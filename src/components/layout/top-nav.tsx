@@ -58,6 +58,7 @@ function navLinksForRole(role: Role): { href: string; label: string; icon: React
     case "EXECUTIVE_BODY":
       return [
         { href: "/executive/dashboard", label: "National View", icon: <LayoutDashboard className="size-4" /> },
+        { href: "/executive/officers", label: "Officers", icon: <Users2 className="size-4" /> },
       ];
   }
 }

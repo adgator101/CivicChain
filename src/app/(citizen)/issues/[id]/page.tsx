@@ -58,7 +58,7 @@ export default async function CitizenIssueDetailPage({
       },
       rootIssue: { select: { id: true, title: true } },
       assignedTo: {
-        select: { name: true, phone: true, department: true, wardNumber: true },
+        select: { id: true, name: true, phone: true, department: true, wardNumber: true },
       },
       downstreamLinks: {
         select: {
@@ -365,6 +365,7 @@ export default async function CitizenIssueDetailPage({
           {/* Who's handling it */}
           {issue.assignedTo && (
             <OfficerContactCard
+              officerId={issue.assignedTo.id}
               name={issue.assignedTo.name}
               department={issue.assignedTo.department}
               wardNumber={issue.assignedTo.wardNumber}

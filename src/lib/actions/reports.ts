@@ -1,6 +1,6 @@
 "use server";
 
-import { authActionClient } from "@/lib/safe-action";
+import { authActionClient, roleActionClient } from "@/lib/safe-action";
 import {
   createReportSchema,
   resolveReportSchema,
@@ -8,8 +8,10 @@ import {
 } from "@/lib/validations/report";
 import { prisma } from "@/lib/prisma";
 import { analyzeReport } from "@/lib/ai/analyze-report";
-import { Category, IssueStatus, Priority } from "@/generated/prisma/client";
+import { Category, IssueStatus, Priority, Role } from "@/generated/prisma/client";
+import { z } from "zod";
 import { computeImpact, haversineDistance, maxPriority, daysSince } from "@/lib/utils";
+import { categoryToDepartment } from "@/lib/departments";
 import { detectCascadeWithAI } from "@/lib/ai/detect-cascade";
 import type { ReportAIAnalysis, ClusterResult } from "@/types";
 
@@ -404,4 +406,101 @@ export const resolveReportDecisionAction = authActionClient
     }
 
     return createNewIssueFromReport(reportInput, user.id, null);
+  });
+
+// ─── Un-merge a wrongly clustered report ──────────────────────────────────────
+// Duplicate clustering (geospatial / semantic) is a signal, not a guarantee —
+// the AI or the 50m/200m rules can occasionally attach a report that is actually
+// a separate problem. The LOCAL_BODY_HEAD (any issue in their municipality) or a
+// section head (issues in their own section) can split that report back out into
+// its own standalone Issue. The parent issue's reportCount / community impact are
+// recalculated; priority is never silently lowered (only arithmetic elevation
+// raises it), consistent with the platform's accountability rules.
+export const detachReportAction = roleActionClient([
+  Role.LOCAL_BODY_HEAD,
+  Role.LOCAL_BODY_EMPLOYEE,
+])
+  .schema(z.object({ reportId: z.string().min(1) }))
+  .action(async ({ parsedInput, ctx }) => {
+    const actor = await prisma.user.findUniqueOrThrow({
+      where: { id: String(ctx.user.id) },
+      select: { role: true, municipalityName: true, department: true, isSectionHead: true },
+    });
+
+    const report = await prisma.report.findUniqueOrThrow({
+      where: { id: parsedInput.reportId },
+      include: { issue: true },
+    });
+    if (!report.issue) {
+      throw new Error("This report is not attached to an issue.");
+    }
+
+    const parent = report.issue;
+
+    if (actor.municipalityName && parent.municipalityName !== actor.municipalityName) {
+      throw new Error("That issue is not in your municipality.");
+    }
+    if (
+      actor.role === Role.LOCAL_BODY_EMPLOYEE &&
+      (!actor.isSectionHead || actor.department !== categoryToDepartment(parent.category))
+    ) {
+      throw new Error("You can only manage reports for your own section.");
+    }
+    if (parent.reportCount <= 1) {
+      throw new Error(
+        "This is the only report on the issue — there is nothing to un-merge."
+      );
+    }
+
+    const newCount = parent.reportCount - 1;
+    const { score } = computeImpact(newCount);
+
+    const [newIssue] = await prisma.$transaction([
+      // The report becomes its own standalone issue (back to community verification).
+      prisma.issue.create({
+        data: {
+          title: report.title,
+          description: report.description,
+          category: report.category,
+          priority: Priority.MEDIUM,
+          status: IssueStatus.SUBMITTED,
+          latitude: report.latitude,
+          longitude: report.longitude,
+          address: report.address,
+          wardNumber: report.wardNumber,
+          municipalityName: report.municipalityName,
+          districtName: report.districtName,
+          provinceName: report.provinceName,
+          reportCount: 1,
+          affectedCitizenCount: 1,
+          communityImpactScore: 0.3,
+        },
+      }),
+      // Recalculate the parent's volume + impact. Never lower priority.
+      prisma.issue.update({
+        where: { id: parent.id },
+        data: {
+          reportCount: newCount,
+          affectedCitizenCount: newCount,
+          communityImpactScore: score,
+          confirmCount: parent.confirmCount > 0 ? { decrement: 1 } : undefined,
+        },
+      }),
+      prisma.issueUpdate.create({
+        data: {
+          issueId: parent.id,
+          authorId: String(ctx.user.id),
+          content: `Report "${report.title}" was un-merged from this issue — it was clustered here in error and is now tracked separately.`,
+          images: [],
+        },
+      }),
+    ]);
+
+    // Re-point the report at its new home.
+    await prisma.report.update({
+      where: { id: report.id },
+      data: { issueId: newIssue.id, status: "PROMOTED" },
+    });
+
+    return { newIssueId: newIssue.id, parentReportCount: newCount };
   });

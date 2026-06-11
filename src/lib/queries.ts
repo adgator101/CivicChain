@@ -120,6 +120,74 @@ export async function getRootCauseSuggestions(where: Prisma.IssueWhereInput) {
   });
 }
 
+// Municipality-wide analytics for the HEAD dashboard — factual aggregates only.
+export type MunicipalityAnalytics = {
+  resolved: number;
+  reopened: number;
+  avgResolutionDays: number | null;
+  onTime: number;
+  committedResolved: number;
+  onTimeRate: number | null;
+  byCategory: { category: string; count: number }[];
+};
+
+export async function getMunicipalityAnalytics(
+  where: Prisma.IssueWhereInput
+): Promise<MunicipalityAnalytics> {
+  const issues = await prisma.issue.findMany({
+    where,
+    select: {
+      status: true,
+      category: true,
+      assignedAt: true,
+      resolvedAt: true,
+      dueDate: true,
+    },
+  });
+
+  let resolved = 0;
+  let reopened = 0;
+  let resSum = 0;
+  let resN = 0;
+  let onTime = 0;
+  let committedResolved = 0;
+  const catMap = new Map<string, number>();
+
+  for (const i of issues) {
+    catMap.set(i.category, (catMap.get(i.category) ?? 0) + 1);
+    if (i.status === IssueStatus.REOPENED) reopened++;
+    if (i.status === IssueStatus.RESOLVED) {
+      resolved++;
+      if (i.assignedAt && i.resolvedAt) {
+        const d =
+          (new Date(i.resolvedAt).getTime() - new Date(i.assignedAt).getTime()) / 86_400_000;
+        if (d >= 0) {
+          resSum += d;
+          resN++;
+        }
+      }
+      if (i.dueDate && i.resolvedAt) {
+        committedResolved++;
+        if (new Date(i.resolvedAt).getTime() <= new Date(i.dueDate).getTime()) onTime++;
+      }
+    }
+  }
+
+  const byCategory = [...catMap.entries()]
+    .map(([category, count]) => ({ category, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return {
+    resolved,
+    reopened,
+    avgResolutionDays: resN ? Math.round(resSum / resN) : null,
+    onTime,
+    committedResolved,
+    onTimeRate: committedResolved ? onTime / committedResolved : null,
+    byCategory,
+  };
+}
+
 // Per-employee performance — built entirely from factual durations, no targets or
 // scores. Resolution time is measured ONLY over the assigned→resolved window, so an
 // officer is never charged for time before the issue reached them.
@@ -129,6 +197,10 @@ export type EmployeePerformance = {
   avgResolutionDays: number | null;
   oldestOpenDays: number | null;
   pastThreshold: number; // open issues sitting past the ACTIVE attention threshold
+  committedResolved: number; // resolved issues that had a committed completion date
+  onTime: number; // of those, finished on or before the committed date
+  onTimeRate: number | null; // onTime / committedResolved (null if no commitments)
+  reopened: number; // resolutions the community sent back (internal signal)
 };
 
 export async function getEmployeePerformance(
@@ -141,19 +213,39 @@ export async function getEmployeePerformance(
       status: true,
       assignedAt: true,
       resolvedAt: true,
+      dueDate: true,
       updatedAt: true,
     },
   });
 
   const acc: Record<
     string,
-    { open: number; resolved: number; resSum: number; resN: number; oldestOpen: number; past: number }
+    {
+      open: number;
+      resolved: number;
+      resSum: number;
+      resN: number;
+      oldestOpen: number;
+      past: number;
+      committed: number;
+      onTime: number;
+      reopened: number;
+    }
   > = {};
 
   for (const i of issues) {
     const id = i.assignedToId!;
-    const a =
-      (acc[id] ??= { open: 0, resolved: 0, resSum: 0, resN: 0, oldestOpen: 0, past: 0 });
+    const a = (acc[id] ??= {
+      open: 0,
+      resolved: 0,
+      resSum: 0,
+      resN: 0,
+      oldestOpen: 0,
+      past: 0,
+      committed: 0,
+      onTime: 0,
+      reopened: 0,
+    });
 
     if (i.status === IssueStatus.RESOLVED) {
       a.resolved++;
@@ -166,11 +258,19 @@ export async function getEmployeePerformance(
           a.resN++;
         }
       }
+      // Timely-completion against the officer's OWN committed date (STORY-017).
+      if (i.dueDate && i.resolvedAt) {
+        a.committed++;
+        if (new Date(i.resolvedAt).getTime() <= new Date(i.dueDate).getTime()) {
+          a.onTime++;
+        }
+      }
     } else {
       a.open++;
       const age = daysSince(i.updatedAt);
       if (age > a.oldestOpen) a.oldestOpen = age;
       if (age > ATTENTION_THRESHOLD_DAYS.ACTIVE) a.past++;
+      if (i.status === IssueStatus.REOPENED) a.reopened++;
     }
   }
 
@@ -183,6 +283,10 @@ export async function getEmployeePerformance(
         avgResolutionDays: a.resN ? Math.round(a.resSum / a.resN) : null,
         oldestOpenDays: a.open ? a.oldestOpen : null,
         pastThreshold: a.past,
+        committedResolved: a.committed,
+        onTime: a.onTime,
+        onTimeRate: a.committed ? a.onTime / a.committed : null,
+        reopened: a.reopened,
       },
     ])
   );

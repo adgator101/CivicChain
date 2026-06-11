@@ -6,20 +6,29 @@ import {
   getAttentionIssues,
   getRootCauseSuggestions,
   getPendingChainAlerts,
+  getMunicipalityAnalytics,
+  getEmployeePerformance,
   scopeForUser,
+  type EmployeePerformance,
 } from "@/lib/queries";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Sparkles } from "lucide-react";
 import { IssueCardBody } from "@/components/civic/issue-card";
 import { SelectIssue } from "@/components/civic/select-issue";
+import { CascadeChainCard } from "@/components/civic/cascade-chain-card";
 import { IssueStatusBadge } from "@/components/civic/issue-status-badge";
 import { PriorityBadge } from "@/components/civic/priority-badge";
-import { VerifyButton } from "@/components/civic/verify-button";
+import { VerifyIssueDialog } from "@/components/civic/verify-issue-dialog";
 import { RootCauseSuggestionCard } from "@/components/civic/root-cause-suggestion-card";
 import { RequestStatePanel } from "@/components/civic/request-officer-dialog";
 import { AssignmentRequestActions } from "@/components/civic/assignment-request-actions";
 import { AttentionBadge } from "@/components/civic/attention-badge";
+import {
+  MunicipalityAnalyticsPanel,
+  TeamPerformancePanel,
+  type TeamMember,
+} from "@/components/civic/dashboard-analytics";
 import {
   AuthorityIssueMap,
   type MapStat,
@@ -36,6 +45,8 @@ const issueCardSelect = {
   reportCount: true,
   communityImpactScore: true,
   affectedCitizenCount: true,
+  confirmCount: true,
+  disputeCount: true,
   wardNumber: true,
   municipalityName: true,
   latitude: true,
@@ -82,8 +93,19 @@ export default async function AuthorityDashboardPage() {
       }
     : { ...scope, OR: [{ assignedToId: user.id }, { requestedToId: user.id }] };
 
-  const [stats, attentionIssues, submittedIssues, allIssues, rootCauseSuggestions, sectionQueue, chainAlerts, myRequests] =
-    await Promise.all([
+  const [
+    stats,
+    attentionIssues,
+    submittedIssues,
+    allIssues,
+    rootCauseSuggestions,
+    sectionQueue,
+    chainAlerts,
+    myRequests,
+    analytics,
+    teamPerf,
+    officers,
+  ] = await Promise.all([
       getDashboardStats(scope),
       getAttentionIssues(scope),
       isHead
@@ -123,7 +145,38 @@ export default async function AuthorityDashboardPage() {
             select: queueSelect,
           })
         : Promise.resolve([]),
+      // HEAD analytics + team performance.
+      isHead ? getMunicipalityAnalytics(scope) : Promise.resolve(null),
+      isHead ? getEmployeePerformance(scope) : Promise.resolve({} as Record<string, EmployeePerformance>),
+      isHead
+        ? prisma.user.findMany({
+            where: {
+              role: Role.LOCAL_BODY_EMPLOYEE,
+              municipalityName: user.municipalityName ?? undefined,
+              isActive: true,
+            },
+            select: { id: true, name: true, department: true },
+          })
+        : Promise.resolve([]),
     ]);
+
+  // Combine officers with their factual performance for the team panel.
+  const teamMembers: TeamMember[] = officers.map((o) => ({
+    id: o.id,
+    name: o.name,
+    department: o.department,
+    perf: teamPerf[o.id] ?? {
+      open: 0,
+      resolved: 0,
+      avgResolutionDays: null,
+      oldestOpenDays: null,
+      pastThreshold: 0,
+      committedResolved: 0,
+      onTime: 0,
+      onTimeRate: null,
+      reopened: 0,
+    },
+  }));
 
   const headerTitle = isHead
     ? "Municipality Dashboard"
@@ -244,17 +297,12 @@ export default async function AuthorityDashboardPage() {
           </div>
           <div className="space-y-2">
             {chainAlerts.map((alert) => (
-              <SelectIssue key={alert.root.id} issueId={alert.root.id}>
-                <Card className="border-l-4 border-amber-500 p-3 transition-colors hover:bg-muted/40">
-                  <p className="text-sm font-medium">
-                    {alert.root.wardNumber ? `Ward ${alert.root.wardNumber} · ` : ""}
-                    {alert.linkedCount} linked issues
-                  </p>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                    Root: {alert.root.title} · fix once, clear the chain
-                  </p>
-                </Card>
-              </SelectIssue>
+              <CascadeChainCard
+                key={alert.root.id}
+                root={alert.root}
+                downstream={alert.downstream}
+                linkedCount={alert.linkedCount}
+              />
             ))}
           </div>
         </section>
@@ -274,13 +322,23 @@ export default async function AuthorityDashboardPage() {
                   <IssueCardBody issue={issue} />
                 </SelectIssue>
                 <div className="flex justify-end">
-                  <VerifyButton issueId={issue.id} />
+                  <VerifyIssueDialog
+                    issueId={issue.id}
+                    issueTitle={issue.title}
+                    affectedCitizenCount={issue.affectedCitizenCount}
+                    confirmCount={issue.confirmCount}
+                    disputeCount={issue.disputeCount}
+                  />
                 </div>
               </div>
             ))}
           </div>
         </section>
       )}
+
+      {/* Municipality analytics + team performance — HEAD only */}
+      {isHead && analytics && <MunicipalityAnalyticsPanel data={analytics} />}
+      {isHead && <TeamPerformancePanel members={teamMembers} />}
 
       {/* Needs attention */}
       {attentionIssues.length > 0 && (
