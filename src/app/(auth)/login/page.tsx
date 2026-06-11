@@ -21,17 +21,22 @@ export default function LoginPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    const { error } = await authClient.signIn.email({ email, password });
-    if (error) {
-      toast.error(error.message ?? "Could not sign in");
+    try {
+      const { error } = await authClient.signIn.email({ email, password });
+      if (error) {
+        toast.error(error.message ?? "Could not sign in");
+        return;
+      }
+      const session = await authClient.getSession();
+      const role = ((session.data?.user as { role?: Role })?.role ?? "CITIZEN") as Role;
+      toast.success("Welcome back");
+      router.push(roleHomePath(role));
+      router.refresh();
+    } catch {
+      toast.error("Could not reach the server. Try again.");
+    } finally {
       setLoading(false);
-      return;
     }
-    const session = await authClient.getSession();
-    const role = ((session.data?.user as { role?: Role })?.role ?? "CITIZEN") as Role;
-    toast.success("Welcome back");
-    router.push(roleHomePath(role));
-    router.refresh();
   }
 
   return (
