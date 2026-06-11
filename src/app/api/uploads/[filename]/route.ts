@@ -1,31 +1,12 @@
-import { NextRequest, NextResponse } from "next/server";
-import path from "path";
-import fs from "fs";
+import { NextResponse } from "next/server";
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ filename: string }> }
-) {
-  const { filename } = await params;
-  const safeName = path.basename(filename);
-  const filePath = path.join(process.cwd(), "public", "uploads", safeName);
-
-  if (!fs.existsSync(filePath)) {
-    return new NextResponse("Not found", { status: 404 });
-  }
-
-  const file = fs.readFileSync(filePath);
-  const ext = path.extname(safeName).toLowerCase();
-  const contentType =
-    ext === ".jpg" || ext === ".jpeg"
-      ? "image/jpeg"
-      : ext === ".png"
-      ? "image/png"
-      : ext === ".webp"
-      ? "image/webp"
-      : "application/octet-stream";
-
-  return new NextResponse(file, {
-    headers: { "Content-Type": contentType },
-  });
+// Legacy local-storage route. Images are now stored on Cloudinary.
+// Old filenames that were saved before the Cloudinary migration can't be
+// recovered from here — this handler just returns a clean 404 so callers
+// get a usable response instead of a silent routing miss.
+export function GET() {
+  return NextResponse.json(
+    { error: "Image not found. Images are now served from Cloudinary." },
+    { status: 404 }
+  );
 }

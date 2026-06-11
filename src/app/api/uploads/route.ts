@@ -1,23 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "crypto";
-import path from "path";
-import fs from "fs/promises";
-import { getCurrentUser } from "@/lib/session";
+import { uploadBuffer } from "@/lib/cloudinary";
 
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
-const EXT: Record<string, string> = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-};
-const MAX_BYTES = 5 * 1024 * 1024; // 5MB per file
+const MAX_BYTES = 5 * 1024 * 1024; // 5 MB per file
 
 export async function POST(request: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const formData = await request.formData();
   const files = formData.getAll("files").filter((f): f is File => f instanceof File);
 
@@ -28,10 +15,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Maximum 5 files" }, { status: 400 });
   }
 
-  const dir = path.join(process.cwd(), "public", "uploads");
-  await fs.mkdir(dir, { recursive: true });
-
-  const urls: string[] = [];
+  // Validate all files before touching the network.
   for (const file of files) {
     if (!ALLOWED.has(file.type)) {
       return NextResponse.json(
@@ -40,13 +24,18 @@ export async function POST(request: NextRequest) {
       );
     }
     if (file.size > MAX_BYTES) {
-      return NextResponse.json({ error: "File too large (max 5MB)" }, { status: 400 });
+      return NextResponse.json({ error: "File too large (max 5 MB)" }, { status: 400 });
     }
-    const filename = `${randomUUID()}${EXT[file.type]}`;
-    const buffer = Buffer.from(await file.arrayBuffer());
-    await fs.writeFile(path.join(dir, filename), buffer);
-    urls.push(`/api/uploads/${filename}`);
   }
+
+  // Read all buffers and upload in parallel — no more sequential waterfall.
+  const buffers = await Promise.all(
+    files.map((f) => f.arrayBuffer().then((ab) => Buffer.from(ab)))
+  );
+
+  const urls = await Promise.all(
+    buffers.map((buf) => uploadBuffer(buf, "civicchain/reports"))
+  );
 
   return NextResponse.json({ urls });
 }

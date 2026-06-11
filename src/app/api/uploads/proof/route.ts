@@ -1,26 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { randomUUID } from "crypto";
-import path from "path";
-import fs from "fs/promises";
 import exifr from "exifr";
-import { getCurrentUser } from "@/lib/session";
+import { uploadBuffer } from "@/lib/cloudinary";
 
 const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp"]);
-const EXT: Record<string, string> = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-};
-const MAX_BYTES = 8 * 1024 * 1024; // 8MB
+const MAX_BYTES = 8 * 1024 * 1024; // 8 MB
 
-// Single-image geotagged proof upload (STORY-012). Saves the file and tries to read
-// EXIF GPS from its metadata. The verify action geo-checks this against the issue.
+// Single-image geotagged proof upload (STORY-012).
+// Parses EXIF GPS from the buffer, then uploads to Cloudinary.
 export async function POST(request: NextRequest) {
-  const user = await getCurrentUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const formData = await request.formData();
   const file = formData.get("file");
   if (!(file instanceof File)) {
@@ -30,31 +17,24 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Unsupported file type: ${file.type}` }, { status: 400 });
   }
   if (file.size > MAX_BYTES) {
-    return NextResponse.json({ error: "File too large (max 8MB)" }, { status: 400 });
+    return NextResponse.json({ error: "File too large (max 8 MB)" }, { status: 400 });
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
 
-  // Parse EXIF GPS from the image metadata (may be absent — camera/browser dependent).
-  let latitude: number | null = null;
-  let longitude: number | null = null;
-  try {
-    const gps = await exifr.gps(buffer);
-    if (gps && Number.isFinite(gps.latitude) && Number.isFinite(gps.longitude)) {
-      latitude = gps.latitude;
-      longitude = gps.longitude;
-    }
-  } catch {
-    // No/unsupported EXIF — fall back to device geolocation on the client.
-  }
+  // Parse EXIF GPS and upload to Cloudinary in parallel.
+  const [gps, url] = await Promise.all([
+    exifr.gps(buffer).catch(() => null),
+    uploadBuffer(buffer, "civicchain/proofs"),
+  ]);
 
-  const dir = path.join(process.cwd(), "public", "uploads");
-  await fs.mkdir(dir, { recursive: true });
-  const filename = `${randomUUID()}${EXT[file.type]}`;
-  await fs.writeFile(path.join(dir, filename), buffer);
+  const latitude =
+    gps && Number.isFinite(gps.latitude) ? gps.latitude : null;
+  const longitude =
+    gps && Number.isFinite(gps.longitude) ? gps.longitude : null;
 
   return NextResponse.json({
-    url: `/api/uploads/${filename}`,
+    url,
     latitude,
     longitude,
     source: latitude != null ? "exif" : "none",
