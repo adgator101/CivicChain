@@ -1,0 +1,35 @@
+# Dependencies & build output (reinstalled / regenerated inside the image)
+node_modules
+.next
+out
+build
+coverage
+
+# Generated Prisma client (regenerated via `prisma generate` during build)
+src/generated
+
+# Env & secrets — passed at runtime via --env-file / compose, never baked in
+.env
+.env.*
+
+# VCS & tooling
+.git
+.gitignore
+.vscode
+.agent
+.kiro
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Misc
+README.md
+*.md
+npm-debug.log*
+.DS_Store
+
+# Local runtime uploads (legacy local storage; uploads now go to Cloudinary)
+public/uploads/*
+!public/uploads/.gitkeep
