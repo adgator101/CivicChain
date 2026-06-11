@@ -20,6 +20,12 @@ import { MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_URL } from "@/lib/mapbox";
 
 // Center of Nepal
 const NEPAL_CENTER = { latitude: 28.3949, longitude: 84.124, zoom: 6 };
+
+// Nepal bounding box [SW, NE] — prevents panning outside the country
+const NEPAL_BOUNDS: [[number, number], [number, number]] = [
+  [80.058, 26.347],
+  [88.201, 30.447],
+];
 const LAYER_ID = "issue-circles";
 
 export type HeatmapIssue = {
@@ -115,6 +121,9 @@ export function NationalHeatmap({ issues }: { issues: HeatmapIssue[] }) {
           mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
           mapStyle={MAPBOX_STYLE_URL}
           style={{ width: "100%", height: "100%" }}
+          maxBounds={NEPAL_BOUNDS}
+          minZoom={6}
+          maxZoom={18}
           interactiveLayerIds={[LAYER_ID]}
           cursor={cursor}
           onMouseMove={(e) => {

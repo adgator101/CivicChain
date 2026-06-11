@@ -23,6 +23,10 @@ import type { Category, IssueStatus, Priority } from "@/generated/prisma/client"
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
 const NEPAL_CENTER = { latitude: 28.3949, longitude: 84.124, zoom: 6 };
+const NEPAL_BOUNDS: [[number, number], [number, number]] = [
+  [80.058, 26.347],
+  [88.201, 30.447],
+];
 const LAYER_ID = "citizen-issue-circles";
 
 type CitizenMapIssue = {
@@ -123,6 +127,9 @@ export function CitizenIssueMap({
         mapboxAccessToken={MAPBOX_TOKEN}
         mapStyle="mapbox://styles/mapbox/light-v11"
         style={{ width: "100%", height: "100%" }}
+        maxBounds={NEPAL_BOUNDS}
+        minZoom={6}
+        maxZoom={18}
         interactiveLayerIds={[LAYER_ID]}
         cursor={cursor}
         onMouseMove={(e) => {

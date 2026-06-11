@@ -21,6 +21,10 @@ import type { Category, Department, IssueStatus, Priority } from "@/generated/pr
 import { MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_URL } from "@/lib/mapbox";
 
 const NEPAL_CENTER = { latitude: 28.3949, longitude: 84.124, zoom: 6 };
+const NEPAL_BOUNDS: [[number, number], [number, number]] = [
+  [80.058, 26.347],
+  [88.201, 30.447],
+];
 const LAYER_ID = "authority-issue-pennants";
 
 // Lets cards rendered inside the left panel (passed as `children`) open the
@@ -213,6 +217,9 @@ export function AuthorityIssueMap({
           mapboxAccessToken={MAPBOX_ACCESS_TOKEN}
           mapStyle={MAPBOX_STYLE_URL}
           style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+          maxBounds={NEPAL_BOUNDS}
+          minZoom={6}
+          maxZoom={18}
           interactiveLayerIds={[LAYER_ID]}
           cursor={cursor}
           onLoad={(e) => {
