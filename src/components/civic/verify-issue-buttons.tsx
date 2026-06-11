@@ -170,7 +170,7 @@ export function VerifyIssueButtons({
 
       <p className="text-xs text-muted-foreground">
         {isResolution
-          ? "If most verifiers dispute the resolution, the issue is reopened."
+          ? "Visit the spot and add a geotagged photo — if enough nearby residents report it's still broken, the issue reopens."
           : "Verifications from your ward and ones with a geotagged photo count more. Use your camera — a photo taken at the spot proves you were there."}
       </p>
     </div>
