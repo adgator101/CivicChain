@@ -47,27 +47,31 @@ export default function RegisterPage() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
+    try {
+      const { error } = await authClient.signUp.email({
+        name: form.name,
+        email: form.email,
+        password: form.password,
+        role,
+        provinceName: form.provinceName || undefined,
+        districtName: form.districtName || undefined,
+        municipalityName: form.municipalityName || undefined,
+        wardNumber: form.wardNumber ? Number(form.wardNumber) : undefined,
+      } as Parameters<typeof authClient.signUp.email>[0]);
 
-    const { error } = await authClient.signUp.email({
-      name: form.name,
-      email: form.email,
-      password: form.password,
-      role,
-      provinceName: form.provinceName || undefined,
-      districtName: form.districtName || undefined,
-      municipalityName: form.municipalityName || undefined,
-      wardNumber: form.wardNumber ? Number(form.wardNumber) : undefined,
-    } as Parameters<typeof authClient.signUp.email>[0]);
+      if (error) {
+        toast.error(error.message ?? "Could not create account");
+        return;
+      }
 
-    if (error) {
-      toast.error(error.message ?? "Could not create account");
+      toast.success("Account created");
+      router.push(roleHomePath(role));
+      router.refresh();
+    } catch {
+      toast.error("Could not reach the server. Try again.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    toast.success("Account created");
-    router.push(roleHomePath(role));
-    router.refresh();
   }
 
   const isCitizen = role === "CITIZEN";
