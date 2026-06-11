@@ -250,6 +250,12 @@ model IssueVerification {
   user      User             @relation(fields: [userId], references: [id])
 
   type      VerificationType @default(CONFIRM)
+
+  // Weighted verification (STORY-012): weight derives from locality + geotagged proof.
+  weight      Float    @default(1)
+  isLocal     Boolean  @default(false) // verifier was in the issue's ward
+  proofImages String[]                 // geotagged proof photo URLs (may be empty)
+
   createdAt DateTime         @default(now())
 
   @@unique([issueId, userId])
@@ -301,6 +307,8 @@ model IssueChainLink {
   downstreamIssue   Issue    @relation("DownstreamLinks", fields: [downstreamIssueId], references: [id])
   detectedAt        DateTime @default(now())
   confidence        Float    @default(0.7) // rule-based score
+  reason            String?               // why these are linked (AI reasoning or rule note)
+  source            String   @default("ai") // "ai" | "rule"
 
   @@unique([upstreamIssueId, downstreamIssueId])
   @@map("issue_chain_link")
